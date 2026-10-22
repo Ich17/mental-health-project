@@ -2,6 +2,11 @@
 .env
 .env.*
 !.env.example
+.secrets/
+credentials.json
+token.json
+client_secret*.json
+*_token.json
 
 # Données perso (exports Whoop / agenda) — jamais dans git
 data/raw/*
