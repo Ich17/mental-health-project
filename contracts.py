@@ -83,20 +83,35 @@ def get_free_slots(user_id: str, date: str) -> list[dict]:
 
 
 def team_trends(team_id: str) -> dict:
-    """Tendances anonymes d'une équipe.
+    """Tendances anonymes d'une équipe (ou d'un département).
 
-    Privacy : le seuil n >= 8 est appliqué dans la requête SQL, pas ici.
-    Si le groupe est trop petit, renvoie {"insufficient_group": True}.
+    Privacy : le seuil n >= 8 est appliqué dans la couche data (data/cohort.py,
+    puis la requête ClickHouse), pas ici ni dans l'agent.
+    Si le groupe est trop petit, renvoie {"insufficient_group": True, "unit_id": <département>}.
+    Exemple : {"unit_id": "ma", "team": "M&A", "scope": "équipe", "n_bucket": "10-15",
+    "share_in_debt": "majorité", "top_cause": "réunions ajoutées après 18h", "cause_change": "+150 %",
+    "recovery_change": -10, "trend": [{"week": "2026-W40", "avg_recovery": 52}, ...]}
     """
-    return {
-        "team": "M&A", "n_bucket": "10-15", "share_in_debt": "majorité",
-        "top_cause": "réunions ajoutées après 18h", "cause_change": "+40%",
-        "trend": [
-            {"week": "2026-W40", "avg_recovery": 52},
-            {"week": "2026-W41", "avg_recovery": 47},
-            {"week": "2026-W42", "avg_recovery": 43},
-        ],
-    }
+    from data import cohort
+
+    return cohort.team_trends(team_id)
+
+
+def company_overview() -> list[dict]:
+    """Toutes les unités affichables (équipes ≥ 8, sinon département en bloc),
+    de la plus en dérive à la plus stable. Mêmes champs que team_trends, sans `trend`."""
+    from data import cohort
+
+    return cohort.company_overview()
+
+
+def measure_rule_effect(unit_id: str, start_date: str) -> dict:
+    """Récupération moyenne de l'unité avant / depuis l'application d'une règle.
+    Exemple : {"recovery_before": 56, "recovery_after": 60, "recovery_change": 4,
+    "cause_change": "-50 %", "verdict": "efficace", "weeks_since": 4}"""
+    from data import cohort
+
+    return cohort.rule_effect(unit_id, start_date)
 
 
 def create_calendar_block(user_id: str, start: str, end: str) -> dict:

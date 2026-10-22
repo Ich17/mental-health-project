@@ -1,53 +1,89 @@
-"""Cerveau de démo déterministe pour les agents d'équipe (sans clé API)."""
+"""Cerveau de démo déterministe pour les agents d'équipe (sans clé API).
+Mêmes outils et mêmes données que les agents LLM ; sert aux tests et au plan B."""
 from __future__ import annotations
 
 from agent.individuel.scripted import _board_data, _call, _post, _results
 from agent.llm import Reply
 
+RULES_BY_CAUSE = {
+    "réunions ajoutées après 18h": "Pas d'ajout de réunion après 18h pour le lendemain avant 10h",
+    "réunions ajoutées le jour même": "Pas d'ajout de réunion le jour même après 17h",
+    "heures de réunion": "Réunions récurrentes plafonnées à 30 minutes",
+}
+
 
 class ScriptedTeamLLM:
     def complete(self, *, agent, system, messages, tools, tool_choice=None) -> Reply:
-        board, _, instruction = messages[0]["content"].partition("## Consigne de l'orchestrateur")
+        board, _, _ = messages[0]["content"].partition("## Consigne de l'orchestrateur")
         kinds = next(t for t in tools if t["name"] == "post_message")["input_schema"]["properties"]["kind"]["enum"]
         return getattr(self, f"_{agent}")(board, kinds, _results(messages))
 
     def _observateur(self, board, kinds, res) -> Reply:
+        if "company_overview" not in res:
+            return Reply("tool_use", [_call("company_overview")])
+        units = res["company_overview"][0]
+        top = units[0]
         if "team_trends" not in res:
-            return Reply("tool_use", [_call("team_trends")])
-        t = res["team_trends"][0]
-        trend = t["trend"]
-        first, last = trend[0]["avg_recovery"], trend[-1]["avg_recovery"]
+            return Reply("tool_use", [_call("team_trends", unit_id=top["unit_id"])])
+        trend = res["team_trends"][0]["trend"]
         if kinds == ["reponse"]:
-            return _post("conseiller", "reponse",
-                         "Récupération moyenne par semaine : "
+            return _post("conseiller", "reponse", f"{top['team']}, récupération moyenne par semaine : "
                          + ", ".join(f"{w['week']} : {w['avg_recovery']}" for w in trend) + ".")
-        direction = "baisse" if last < first - 2 else "hausse" if last > first + 2 else "stable"
-        return _post("conseiller", "signal",
-                     f"Équipe {t['team']} : récupération moyenne en {direction} ({first} → {last} sur "
-                     f"{len(trend)} semaines). La {t['share_in_debt']} de l'équipe est en dette de récupération. "
-                     f"Cause principale : {t['top_cause']} ({t['cause_change']}).",
-                     {"tendance": direction, "cause": t["top_cause"], "evolution_cause": t["cause_change"]})
+        stable = [u["team"] for u in units[1:] if u["recovery_change"] >= 0]
+        grouped = [u["team"] for u in units if u["scope"] == "département"]
+        return _post("mesure", "signal",
+                     f"Unité prioritaire : {top['team']} ({top['n_bucket']} personnes). Récupération moyenne "
+                     f"{top['recovery_change']:+d} points vs le début de période, la {top['share_in_debt']} en dette "
+                     f"de récupération. Cause principale : {top['top_cause']} ({top['cause_change']}). "
+                     f"Stables : {', '.join(stable) or 'aucune'}. "
+                     + (f"Regroupé au niveau département (équipe de moins de 8) : {', '.join(grouped)}." if grouped else ""),
+                     {"prioritaire": top["unit_id"], "nom": top["team"], "cause": top["top_cause"],
+                      "evolution_cause": top["cause_change"], "recovery_change": top["recovery_change"]})
+
+    def _mesure(self, board, kinds, res) -> Reply:
+        if "get_team_rules" not in res:
+            return Reply("tool_use", [_call("get_team_rules")])
+        applied = [r for r in res["get_team_rules"][0] if r["status"] in ("applied", "measured")]
+        if applied and "measure_rule_effect" not in res:
+            return Reply("tool_use", [_call("measure_rule_effect", rule_id=r["id"]) for r in applied])
+        effects = res.get("measure_rule_effect", [])
+        done = [e for e in effects if e.get("verdict") in ("efficace", "sans effet net")]
+        if done and "record_rule_effect" not in res:
+            return Reply("tool_use", [_call(
+                "record_rule_effect", rule_id=e["rule_id"],
+                measured_effect=f"{e['recovery_change']:+d} points de récupération, {e['cause_change']} de "
+                                f"{e['cause_metric']}, en {e['weeks_since']} semaines") for e in done])
+        good = next((e for e in done if e["verdict"] == "efficace"), None)
+        if not effects:
+            return _post("conseiller", "mesure", "Aucune règle appliquée pour l'instant : rien à mesurer.")
+        lines = [f"« {e['rule_text']} » : " + (
+            f"{e['verdict']}, récupération {e['recovery_before']} → {e['recovery_after']}, "
+            f"{e['cause_metric']} {e['cause_change']} en {e['weeks_since']} semaines"
+            if e["verdict"] != "trop tôt" else "trop récente pour être mesurée") for e in effects]
+        return _post("conseiller", "mesure", " ; ".join(lines) + "."
+                     + (" Une règle de ce type peut être transposée à l'unité prioritaire." if good else ""),
+                     {"regle_efficace": good["rule_text"] if good else None,
+                      "effet": f"{good['recovery_change']:+d} points de récupération" if good else None})
 
     def _conseiller(self, board, kinds, res) -> Reply:
-        signal = _board_data(board, "signal")
+        signal, mesure = _board_data(board, "signal"), _board_data(board, "mesure")
+        rule = RULES_BY_CAUSE.get(signal.get("cause"), "Pas d'ajout de réunion le jour même après 17h")
         if "question" in kinds and "| reponse]" not in board:
-            return _post("observateur", "question", "Donne-moi la récupération moyenne semaine par semaine.")
+            return _post("observateur", "question",
+                         f"Donne-moi la courbe semaine par semaine de {signal.get('nom')} : "
+                         "la dérive est-elle récente ou installée ?")
         if "proposition" in kinds:
-            if "get_team_rules" not in res:
-                return Reply("tool_use", [_call("get_team_rules")])
             if "suggest_rule" not in res:
-                return Reply("tool_use", [_call(
-                    "suggest_rule", rule_text="Pas de réunion ajoutée après 18h pour le lendemain avant 10h",
-                    rationale=f"cause principale : {signal.get('cause')}")])
-            past = [r for r in res["get_team_rules"][0] if r.get("measured_effect")]
-            ref = f" Une règle comparable a donné {past[-1]['measured_effect']}." if past else ""
+                return Reply("tool_use", [_call("suggest_rule", unit_id=signal["prioritaire"], rule_text=rule,
+                                                rationale=f"cause principale : {signal.get('cause')}")])
+            ref = (f" Une règle comparable (« {mesure['regle_efficace']} ») a donné {mesure['effet']}."
+                   if mesure.get("regle_efficace") else "")
             return _post("orchestrateur", "proposition",
-                         "Règle suggérée : pas de réunion ajoutée après 18h pour le lendemain avant 10h. "
-                         f"Elle cible directement la cause principale ({signal.get('cause')}).{ref}")
+                         f"Règle suggérée pour {signal.get('nom')} : « {rule} ». Elle agit directement sur la "
+                         f"cause principale ({signal.get('cause')}, {signal.get('evolution_cause')}).{ref}")
+        ref = (f" Une règle du même type a déjà donné {mesure['effet']} ailleurs dans l'entreprise ; "
+               "on mesurera l'effet de celle-ci dans 4 semaines." if mesure.get("regle_efficace") else "")
         return _post("tous", "message_final",
-                     f"La récupération moyenne de l'équipe est en {signal.get('tendance', 'évolution')}, "
-                     f"principalement à cause des {signal.get('cause')} ({signal.get('evolution_cause')}). "
-                     "Règle suggérée : pas de réunion ajoutée après 18h pour le lendemain avant 10h. "
-                     "La dernière règle de ce type a amélioré la récupération moyenne de l'équipe ; "
-                     "on mesurera l'effet de celle-ci sur 4 semaines."
-                     )
+                     f"{signal.get('nom')} : récupération moyenne en baisse ({signal.get('recovery_change'):+d} points), "
+                     f"la cause principale étant les {signal.get('cause')} ({signal.get('evolution_cause')}). "
+                     f"Règle suggérée : « {rule} ».{ref} Les autres unités sont stables.")

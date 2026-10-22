@@ -13,7 +13,7 @@ from typing import Literal
 
 AgentName = Literal[
     "detection", "analyse", "action",   # agent/individuel
-    "observateur", "conseiller",        # agent/team
+    "observateur", "mesure", "conseiller",  # agent/team
     "orchestrateur", "personne",
 ]
 
@@ -22,6 +22,7 @@ MessageKind = Literal[
     "consigne",       # orchestrateur : lance le run
     "signal",         # Détection : ce qui a dérivé, jours à risque
     "analyse",        # Analyse : causes + mémoire (ce qui a marché)
+    "mesure",         # Mesure (équipe) : effet des règles appliquées
     "question",       # n'importe quel agent : demande une précision à un autre
     "reponse",        # réponse à une question
     "proposition",    # Action : plan d'actions

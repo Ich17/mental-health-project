@@ -1,38 +1,59 @@
 # agent/team : les agents côté entreprise
 
-Règle d'or : l'entreprise est alertée sur des **causes**, jamais sur des **personnes**. Les agents d'équipe ne voient que des agrégats (n ≥ 8, filtré dans la requête SQL de `contracts.team_trends`).
+Règle d'or : l'entreprise est alertée sur des **causes**, jamais sur des **personnes**.
 
-## Ce qui existe déjà (V1 qui tourne)
+## Le déroulé d'une revue d'entreprise
 
 ```
-Observateur --signal--> Conseiller --proposition--> revue (code) --> message_final pour la RH
-     ^                     |
-     +------question-------+
+Observateur --signal--> Mesure --mesure--> Conseiller --proposition--> revue (code) --> message_final RH
+     ^                    ^                    |
+     +----question--------+------question------+
 ```
 
 | Agent | Rôle | Outils |
 |---|---|---|
-| Observateur | Lit les tendances anonymes de l'équipe | `team_trends` |
-| Conseiller | Propose une règle d'équipe, en s'appuyant sur l'effet des règles passées | `get_team_rules`, `suggest_rule` |
+| Observateur | Fait le tour des unités, repère celle qui dérive le plus | `company_overview`, `team_trends` |
+| Mesure | Mesure l'effet des règles appliquées et l'enregistre en mémoire | `get_team_rules`, `measure_rule_effect`, `record_rule_effect` |
+| Conseiller | Propose une règle pour l'unité prioritaire, en s'appuyant sur ce qui a marché ailleurs | `get_team_rules`, `suggest_rule` |
+
+## Le cycle d'une règle (« s'améliore avec le temps »)
+
+```
+suggested  ── clic RH (POST /api/team/rules/{id}/apply) ──>  applied  ── 2 semaines plus tard, la Mesure ──>  measured
+    └── clic RH (POST /api/team/rules/{id}/dismiss) ──> dismissed
+```
+
+En démo : une règle a été appliquée il y a 4 semaines chez Coverage. À la première revue, la Mesure trouve +4 points de récupération et −50 % de réunions ajoutées le jour même, et le Conseiller s'en sert pour proposer une règle comparable à M&A, l'unité qui dérive.
+
+## Données : la cohorte simulée (`data/cohort.py`)
+
+40 salariés, 4 équipes, 8 semaines : M&A dérive, Leveraged Finance est stable, Coverage s'améliore après sa règle, Data compte moins de 8 personnes. On y accède uniquement via `contracts.py` (`company_overview`, `team_trends`, `measure_rule_effect`), qu'on branchera sur ClickHouse sans changer les signatures.
+
+Confidentialité appliquée dans la couche data :
+- une équipe de moins de 8 personnes n'est jamais affichée seule ; son département est présenté **en bloc, sans ses équipes sœurs**, sinon on pourrait déduire la petite équipe par différence ;
+- effectifs en tranches (« 10-15 »), parts qualitatives (« majorité »), moyennes arrondies ;
+- une règle ne peut viser qu'une unité affichable.
+
+Et dans la revue du code : jamais d'effectif < 8 ni d'identifiant dans un texte RH, pas de vocabulaire interdit ; pas de doublon si la même règle est déjà suggérée ou appliquée.
+
+## Lancer
 
 ```bash
-python -m agent.team.cli --team ma --scripted
+python -m agent.team.cli --scripted
 python -m pytest -q agent/team
 ```
 
-## Fichiers
+## Routes API
 
-| Fichier | Rôle |
+| Route | Effet |
 |---|---|
-| `council.py` | L'orchestrateur : ordre de parole, revue `guardrails.check_hr_text`, enregistrement de la règle |
-| `tools.py` | Outils et droits (`AGENT_TOOLS`) |
-| `prompts/` | `commun.md` + un fichier par agent |
-| `scripted.py` | Cerveau de démo sans clé API (utilisé par les tests et la CI) |
+| `POST /api/agent/team-runs` `{"wait": false}` | Lance une revue d'entreprise, renvoie `run_id` (suivi via `GET /api/agent/runs/{id}`) |
+| `GET /api/team/overview` | Les unités affichables, de la plus en dérive à la plus stable |
+| `GET /api/team/rules` | Toutes les règles et leur effet mesuré |
+| `POST /api/team/rules/{id}/apply` / `dismiss` | La RH applique ou écarte une règle suggérée |
 
 ## Pistes pour la suite
 
-- Un agent **Mesure** qui évalue l'effet d'une règle appliquée (récupération moyenne 4 semaines avant / après) : c'est l'écran 4 et la boucle « s'améliore avec le temps ».
-- Remonter au département quand l'équipe est trop petite, au lieu de s'arrêter.
-- Pour ajouter un agent : son prompt dans `prompts/`, ses outils dans `AGENT_TOOLS`, ses types de messages dans `AGENT_KINDS` (council.py), sa place dans l'ordre de parole, et sa méthode dans `scripted.py`.
-
-Tant que tu restes dans `agent/team/`, tu ne touches à rien du côté individuel. Les fichiers communs (`agent/*.py`, `postgres.sql`) : prévenir avant de les modifier.
+- Planifier la revue chaque lundi matin (APScheduler dans l'API).
+- Brancher `data/cohort.py` sur ClickHouse quand la cohorte y est chargée.
+- Pour ajouter un agent : son prompt dans `prompts/`, ses outils dans `AGENT_TOOLS`, ses types de messages dans `AGENT_KINDS` (`council.py`), sa place dans l'ordre de parole, et sa méthode dans `scripted.py`.

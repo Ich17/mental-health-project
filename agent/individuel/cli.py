@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 COLORS = {"detection": "\033[36m", "analyse": "\033[35m", "action": "\033[32m",
           "orchestrateur": "\033[33m", "personne": "\033[34m",
-          "observateur": "\033[36m", "conseiller": "\033[32m"}
+          "observateur": "\033[36m", "mesure": "\033[35m", "conseiller": "\033[32m"}
 RESET, DIM = "\033[0m", "\033[2m"
 
 

@@ -1,20 +1,20 @@
-"""Orchestrateur côté équipe : l'Observateur et le Conseiller délibèrent,
-le code relit, la RH reçoit une règle suggérée.
+"""Orchestrateur côté entreprise : Observateur, Mesure et Conseiller délibèrent,
+le code relit, la RH reçoit au plus une règle suggérée.
 
-    Observateur --signal--> Conseiller --proposition--> revue (code) --> message_final
-         ^                     |
-         +------question-------+
+    Observateur --signal--> Mesure --mesure--> Conseiller --proposition--> revue (code) --> message_final
+         ^                    ^                    |
+         +----question--------+------question------+
 
-Point de départ volontairement simple, à enrichir (ex. un agent qui mesure
-l'effet des règles appliquées). La mécanique (Agent, Board, mémoire, revue)
-est la même que côté individuel.
+Cycle de vie d'une règle (« s'améliore avec le temps ») :
+    suggested  (Conseiller, après revue)
+ -> applied    (clic RH : POST /api/team/rules/{id}/apply)
+ -> measured   (Mesure, au run suivant, une fois 2 semaines de recul)
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Callable
 
-import contracts
 from agent import guardrails
 from agent.agents import Agent
 from agent.board import Board, Message
@@ -23,27 +23,42 @@ from agent.memory import get_store
 from agent.team.scripted import ScriptedTeamLLM
 from agent.team.tools import AGENT_TOOLS, TOOLS
 from agent.toolkit import RunContext
+from data import cohort
 
-AGENTS = ["observateur", "conseiller"]
+AGENTS = ["observateur", "mesure", "conseiller"]
 RECIPIENTS = AGENTS + ["orchestrateur"]
 PROMPTS = Path(__file__).with_name("prompts")
 AGENT_KINDS = {
     "observateur": ["signal", "reponse"],
+    "mesure": ["mesure", "reponse"],
     "conseiller": ["proposition", "message_final", "question"],
 }
-MAX_TURNS = 8
+MAX_TURNS = 10
 MAX_REVISIONS = 2
 
+INSTRUCTIONS = {
+    "observateur": "Fais le tour de l'entreprise et poste ton `signal` à la mesure.",
+    "mesure": "Mesure les règles appliquées, enregistre leur effet, puis poste ta `mesure` au conseiller.",
+    "conseiller": "Lis le signal et la mesure, puis poste ta `proposition` à l'orchestrateur.",
+}
 
-def run(team_id: str, *, llm: LLM | None = None, store=None,
+
+def demo_rules() -> list[dict]:
+    """Règle déjà appliquée il y a 4 semaines dans la cohorte simulée : la Mesure en calcule l'effet."""
+    return [{"team_id": cohort.unit_of(cohort.SEED_RULE["team_id"]),
+             "rule_text": cohort.SEED_RULE["rule_text"] + " (équipe Coverage)",
+             "start_date": cohort.rule_start_date(), "measured_effect": None, "status": "applied"}]
+
+
+def run(*, llm: LLM | None = None, store=None,
         on_message: Callable[[dict], None] | None = None,
         on_start: Callable[[int], None] | None = None) -> dict:
     llm = llm or default_llm(ScriptedTeamLLM)
     store = store or get_store()
-    store.seed_team(team_id)
-    ctx = RunContext(store=store, team_id=team_id)
-    board = Board(run_kind="equipe", subject=team_id)
-    run_id = store.create_run("equipe", team_id)
+    store.seed_team_rules(demo_rules())
+    ctx = RunContext(store=store)
+    board = Board(run_kind="equipe", subject="entreprise")
+    run_id = store.create_run("equipe", "entreprise")
     if on_start:
         on_start(run_id)
     agents = {n: Agent(n, PROMPTS, TOOLS, AGENT_TOOLS[n], AGENT_KINDS[n]) for n in AGENTS}
@@ -59,34 +74,31 @@ def run(team_id: str, *, llm: LLM | None = None, store=None,
     def orchestrator(to, kind, content, data=None):
         return post(Message(author="orchestrateur", to=to, kind=kind, content=content, data=data or {}))
 
-    # Groupe trop petit : on ne lance même pas les agents (CLAUDE.md §3).
-    if contracts.team_trends(team_id).get("insufficient_group"):
-        final = orchestrator("tous", "message_final",
-                             "Équipe trop petite pour une analyse anonyme : les tendances sont "
-                             "regroupées au niveau du département.")
-        store.finish_run(run_id, "done", final.content)
-        return {"run_id": run_id, "status": "done", "final_message": final.content,
-                "rules": [], "messages": board.to_dict()["messages"], "tool_trace": trace}
-
-    orchestrator("observateur", "consigne", "Revue hebdomadaire de l'équipe : tendance, cause, règle à suggérer.")
-    speaker, kinds, instruction = "observateur", ["signal"], "Lis les tendances et poste ton `signal` au conseiller."
-    asked, revisions, final, rules = False, 0, None, []
+    orchestrator("observateur", "consigne",
+                 "Revue hebdomadaire de l'entreprise : quelle unité dérive, quelles règles ont marché, "
+                 "quelle règle suggérer à la RH.")
+    speaker, kinds, instruction = "observateur", None, INSTRUCTIONS["observateur"]
+    asked, waiting, revisions, final, rules = False, None, 0, None, []
 
     try:
         for _ in range(MAX_TURNS):
-            msg = post(agents[speaker].take_turn(llm, board, ctx, instruction, RECIPIENTS, kinds, trace))
+            allowed = [k for k in (kinds or AGENT_KINDS[speaker]) if k != "question" or not asked]
+            msg = post(agents[speaker].take_turn(llm, board, ctx, instruction, RECIPIENTS, allowed, trace))
 
             if msg.kind == "question":
-                asked = True
-                speaker, kinds = "observateur", ["reponse"]
-                instruction = "Le conseiller te pose une question (dernier message). Réponds par une `reponse`."
-            elif msg.kind in ("signal", "reponse"):
-                speaker = "conseiller"
-                kinds = ["proposition"] + ([] if asked else ["question"])
-                instruction = "Lis le signal, consulte les règles passées, puis poste ta `proposition`."
+                asked, waiting = True, speaker
+                speaker, kinds = msg.to, ["reponse"]
+                instruction = f"{msg.author} te pose une question (dernier message). Réponds par une `reponse`."
+            elif msg.kind == "reponse":
+                speaker, kinds = waiting, ["proposition"]
+                instruction = "La réponse est sur le tableau. " + INSTRUCTIONS[speaker]
+            elif msg.kind == "signal":
+                speaker, kinds, instruction = "mesure", None, INSTRUCTIONS["mesure"]
+            elif msg.kind == "mesure":
+                speaker, kinds, instruction = "conseiller", None, INSTRUCTIONS["conseiller"]
             elif msg.kind == "proposition":
-                issues = guardrails.check_hr_text(
-                    msg.content + " " + " ".join(a["payload"]["rule_text"] for a in ctx.draft_actions))
+                texts = [msg.content] + [a["payload"]["rule_text"] for a in ctx.draft_actions]
+                issues = guardrails.check_hr_text(" ".join(texts))
                 if issues and revisions < MAX_REVISIONS:
                     revisions += 1
                     ctx.draft_actions.clear()
@@ -94,10 +106,14 @@ def run(team_id: str, *, llm: LLM | None = None, store=None,
                                  {"approved": False, "issues": issues})
                     kinds, instruction = ["proposition"], "Refais la proposition en corrigeant chaque point."
                     continue
-                for a in ctx.draft_actions[:1]:  # une règle maximum
-                    if not guardrails.check_hr_text(a["payload"]["rule_text"]):
-                        a["id"] = store.suggest_team_rule(team_id, a["payload"]["rule_text"])
-                        rules.append(a)
+                active = {(r["team_id"], r["rule_text"]) for r in store.team_rules()
+                          if r["status"] in ("suggested", "applied")}
+                for a in ctx.draft_actions:
+                    p = a["payload"]
+                    if guardrails.check_hr_text(p["rule_text"]) or (p["team_id"], p["rule_text"]) in active:
+                        continue
+                    a["id"] = store.suggest_team_rule(p["team_id"], p["rule_text"])
+                    rules.append(a)
                 ctx.draft_actions.clear()
                 orchestrator("conseiller", "revue", f"Validé : {len(rules)} règle(s) suggérée(s) à la RH.",
                              {"approved": True, "rule_ids": [r["id"] for r in rules]})
@@ -105,8 +121,8 @@ def run(team_id: str, *, llm: LLM | None = None, store=None,
             elif msg.kind == "message_final":
                 if guardrails.check_hr_text(msg.content):
                     msg = orchestrator("tous", "message_final",
-                                       "Tendance d'équipe disponible ; une règle a été suggérée. "
-                                       "Détails dans l'onglet Règles.")
+                                       "Revue d'équipe terminée : une unité est en dérive et une règle a été "
+                                       "suggérée. Détails dans l'onglet Règles.")
                 final = msg
                 break
         else:
