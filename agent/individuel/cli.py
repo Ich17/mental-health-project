@@ -5,6 +5,7 @@
     python -m agent.individuel.cli --kind chat --question "Pourquoi je suis à plat le jeudi ?"
     python -m agent.individuel.cli --scripted              # sans clé API
     python -m agent.individuel.cli --trace                 # affiche aussi les appels d'outils
+    python -m agent.individuel.cli --persona closing       # faux positif : pic de clôture puis retour à la normale
 """
 import argparse
 import json
@@ -34,11 +35,15 @@ def main():
     ap.add_argument("--question")
     ap.add_argument("--scripted", action="store_true", help="cerveau de démo, sans appel LLM")
     ap.add_argument("--trace", action="store_true", help="affiche les appels d'outils")
+    ap.add_argument("--persona", choices=["closing"], help="profil simulé (défaut : celui de contracts.py)")
     args = ap.parse_args()
     if args.scripted:
         os.environ["AGENT_MODE"] = "scripted"
 
-    from agent.individuel import council
+    from agent.individuel import council, personas
+
+    if args.persona:
+        personas.use_persona(args.persona)
 
     result = council.run(args.user, args.kind, args.question, on_message=show)
     print(f"\n{DIM}run #{result['run_id']} : {result['status']}, "

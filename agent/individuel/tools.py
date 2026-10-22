@@ -15,6 +15,7 @@ from datetime import date, timedelta
 from statistics import mean
 
 import contracts
+from agent.individuel import trend
 from agent.toolkit import RunContext, Tool, ToolError, obj as _obj
 
 
@@ -36,6 +37,10 @@ def forecast_week(ctx: RunContext):
 
 def get_free_slots(ctx: RunContext, date: str):
     return contracts.get_free_slots(ctx.user_id, date)
+
+
+def assess_trend(ctx: RunContext):
+    return trend.assess_trend(contracts.get_daily_metrics(ctx.user_id, 42))
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +131,9 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          _obj(), get_drivers),
     Tool("forecast_week", "Récupération prévue pour les prochains jours à partir de l'agenda (vert/orange/rouge).",
          _obj(), forecast_week),
+    Tool("assess_trend", "Dérive de fond ou pic ponctuel ? Compare les 2 dernières semaines à la base personnelle "
+         "(calcul déterministe) : derive, pic_passe, pic_attendu, baisse_recente ou stable, avec l'explication.",
+         _obj(), assess_trend),
     Tool("get_free_slots", "Créneaux libres d'une journée.",
          _obj({"date": {"type": "string", "description": "AAAA-MM-JJ"}}, ["date"]), get_free_slots),
     Tool("get_memory", "Mémoire : hypothèses, expériences passées et leur effet, feedback, actions récentes.",
@@ -151,7 +159,7 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
 ]}
 
 AGENT_TOOLS: dict[str, list[str]] = {
-    "detection": ["get_daily_metrics", "forecast_week"],
+    "detection": ["get_daily_metrics", "forecast_week", "assess_trend"],
     "analyse": ["get_drivers", "get_memory", "evaluate_experiment", "save_hypothesis"],
     "action": ["get_free_slots", "propose_block", "start_experiment", "draft_message"],
 }
