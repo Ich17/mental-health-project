@@ -126,9 +126,10 @@ def clean(rows: list[dict]) -> tuple[list[dict], list[str]]:
     return out, notes
 
 
-def write_csv(rows: list[dict], path: Path) -> None:
+def write_csv(rows: list[dict], path: Path, drop: tuple = ()) -> None:
     """CSV lisible dans Excel français (séparateur ; et virgule décimale)."""
     cols = ["user_id", "team_id", "date", *METRICS, "bedtime", "source", "imputed", *WORK_COLUMNS]
+    cols = [c for c in cols if c not in drop]
     fmt = lambda v: str(v).replace(".", ",") if isinstance(v, float) else ("" if v is None else str(v))  # noqa: E731
     lines = [";".join(cols)] + [";".join(fmt(r.get(c)) for c in cols) for r in rows]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
