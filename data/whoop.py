@@ -4,6 +4,7 @@ Usage (en local, depuis la racine du repo, avec WHOOP_CLIENT_ID / WHOOP_CLIENT_S
 
     python -m data.whoop login           # ouvre le navigateur, tu te connectes à Whoop
     python -m data.whoop fetch --days 90 # télécharge recovery / sleep / cycle → data/raw/
+                                         # (relançable : garde ce qui est déjà téléchargé)
     python -m data.whoop daily           # reconstruit data/raw/whoop_daily.json depuis les exports
 
 Tout ce qui est écrit va dans data/raw/ (ignoré par git) : jeton, exports bruts, table journalière.
@@ -109,6 +110,25 @@ def access_token() -> str:
 
 # --- Export ----------------------------------------------------------------
 
+def _get(c: httpx.Client, path: str, params: dict) -> httpx.Response:
+    """GET avec patience : wifi lent (timeouts) et limite de débit WHOOP (429)."""
+    for attempt in range(6):
+        try:
+            r = c.get(path, params=params)
+        except httpx.TransportError as e:  # timeout, coupure réseau…
+            wait = 2 ** attempt
+            print(f"  réseau lent ({type(e).__name__}), nouvel essai dans {wait}s…")
+            time.sleep(wait)
+            continue
+        if r.status_code == 429 or r.status_code >= 500:
+            time.sleep(2 ** attempt)
+            continue
+        r.raise_for_status()
+        return r
+    raise SystemExit("WHOOP ne répond pas après plusieurs essais : relance la même commande "
+                     "(ce qui est déjà téléchargé est gardé).")
+
+
 def fetch_collection(path: str, start: datetime, end: datetime | None = None) -> list[dict]:
     """Toutes les pages d'une collection v2 (limit max 25, pagination nextToken)."""
     headers = {"Authorization": f"Bearer {access_token()}"}
@@ -116,29 +136,31 @@ def fetch_collection(path: str, start: datetime, end: datetime | None = None) ->
     if end:
         params["end"] = end.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     records = []
-    with httpx.Client(base_url=API, headers=headers, timeout=30) as c:
+    timeout = httpx.Timeout(60, connect=30)
+    with httpx.Client(base_url=API, headers=headers, timeout=timeout) as c:
         while True:
-            r = c.get(path, params=params)
-            if r.status_code == 429:  # rate limit : on souffle un peu
-                time.sleep(5)
-                continue
-            r.raise_for_status()
-            body = r.json()
+            body = _get(c, path, params).json()
             records += body.get("records", [])
             if not body.get("next_token"):
                 return records
             params["nextToken"] = body["next_token"]
 
 
-def fetch(days: int = 90) -> dict[str, list[dict]]:
-    """Télécharge recovery / sleep / cycle et sauvegarde les exports bruts (plan B)."""
+def fetch(days: int = 90, only: list[str] | None = None, force: bool = False) -> None:
+    """Télécharge recovery / sleep / cycle et sauvegarde les exports bruts (plan B).
+
+    Une collection déjà sauvegardée n'est pas retéléchargée (sauf --force) : si le réseau
+    coupe au milieu, il suffit de relancer la commande.
+    """
     start = datetime.now(timezone.utc) - timedelta(days=days)
-    out = {}
-    for name, path in ENDPOINTS.items():
-        out[name] = fetch_collection(path, start)
-        (RAW / f"whoop_{name}.json").write_text(json.dumps(out[name], indent=1))
-        print(f"{name:9s} {len(out[name]):4d} enregistrements → data/raw/whoop_{name}.json")
-    return out
+    for name in only or ENDPOINTS:
+        f = RAW / f"whoop_{name}.json"
+        if f.exists() and not force and not only:
+            print(f"{name:9s} déjà là, on passe (--force pour retélécharger)")
+            continue
+        records = fetch_collection(ENDPOINTS[name], start)
+        f.write_text(json.dumps(records, indent=1))
+        print(f"{name:9s} {len(records):4d} enregistrements → data/raw/whoop_{name}.json")
 
 
 # --- Transformation → recovery_daily (CLAUDE.md §7) --------------------------
@@ -187,7 +209,9 @@ def to_daily(recovery: list[dict], sleep: list[dict], cycle: list[dict],
 
 def daily_from_raw(user_id: str = "ichane") -> list[dict]:
     """Reconstruit la table journalière depuis les exports JSON de data/raw/ (marche hors ligne)."""
-    load = lambda n: json.loads((RAW / f"whoop_{n}.json").read_text())  # noqa: E731
+    def load(n):  # cycle manquant → strain à 0, le reste marche quand même
+        f = RAW / f"whoop_{n}.json"
+        return json.loads(f.read_text()) if f.exists() or n != "cycle" else []
     rows = to_daily(load("recovery"), load("sleep"), load("cycle"), user_id=user_id)
     (RAW / "whoop_daily.json").write_text(json.dumps(rows, indent=1))
     print(f"{len(rows)} jours → data/raw/whoop_daily.json")
@@ -198,11 +222,13 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Connecteur WHOOP")
     p.add_argument("cmd", choices=["login", "fetch", "daily"])
     p.add_argument("--days", type=int, default=90)
+    p.add_argument("--only", nargs="+", choices=list(ENDPOINTS), help="ne télécharger que ces collections")
+    p.add_argument("--force", action="store_true", help="retélécharger même si déjà sauvegardé")
     a = p.parse_args()
     if a.cmd == "login":
         login()
     elif a.cmd == "fetch":
-        fetch(a.days)
+        fetch(a.days, a.only, a.force)
         daily_from_raw(os.getenv("USER_ID", "ichane"))
     else:
         daily_from_raw(os.getenv("USER_ID", "ichane"))

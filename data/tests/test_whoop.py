@@ -24,3 +24,22 @@ def test_to_daily_skips_unscored_and_calibrating():
     calibrating = {**RECOVERY, "score": {**RECOVERY["score"], "user_calibrating": True}}
     pending = {**RECOVERY, "score_state": "PENDING_SCORE"}
     assert to_daily([calibrating, pending], [SLEEP], [CYCLE]) == []
+
+
+def test_get_retries_on_slow_network(monkeypatch):
+    import httpx
+
+    from data import whoop
+
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.ConnectTimeout("handshake timed out")
+        return httpx.Response(200, json={"records": [], "next_token": None})
+
+    monkeypatch.setattr(whoop.time, "sleep", lambda s: None)
+    with httpx.Client(base_url="https://x", transport=httpx.MockTransport(handler)) as c:
+        assert whoop._get(c, "/v2/cycle", {}).json() == {"records": [], "next_token": None}
+    assert calls["n"] == 3
