@@ -32,6 +32,18 @@ DRIFT_STARTS = [38, 52, 62]   # les 3 dérives ne commencent pas le même jour
 SPIKE_START = 45
 RAMP_DAYS = 28                # durée de la montée progressive
 
+# Rythmes réels calibrés sur Radoslaw (167 salariés, 58 000 mails) : la FORME de la journée
+# et le nombre de destinataires. Les volumes et la dérive restent ceux de la cible (juniors
+# banque / conseil), car une usine de 2010 envoie bien moins de mails.
+# Recalcul : python -m data.radoslaw
+RADOSLAW_HOUR_PROFILE = [  # quarts d'heure du début à la fin de la journée de travail
+    0.0025, 0.0032, 0.0068, 0.0124, 0.0131, 0.0144, 0.0208, 0.0302, 0.0317, 0.0334, 0.0372, 0.0372,
+    0.0336, 0.0361, 0.0353, 0.0329, 0.0277, 0.0305, 0.0298, 0.0313, 0.0317, 0.0326, 0.0353, 0.034,
+    0.0339, 0.0305, 0.032, 0.0325, 0.0316, 0.0322, 0.0313, 0.0301, 0.0301, 0.0317, 0.03, 0.0206]
+RADOSLAW_RECIPIENTS_OUT = [  # part des mails envoyés à 1, 2, … 10+ destinataires
+    0.8642, 0.0598, 0.031, 0.0163, 0.0077, 0.0035, 0.0024, 0.002, 0.0021, 0.011]
+RADOSLAW_RECIPIENTS_IN = [0.6115, 0.0846, 0.0657, 0.046, 0.0274, 0.0148, 0.0121, 0.0114, 0.0134, 0.1129]
+
 
 def generate(n_people: int = 10, days: int = 91, end: date = DEFAULT_END,
              team_id: str = "produit", seed: int = 42) -> tuple[list[WorkEvent], dict]:
@@ -110,16 +122,22 @@ class _Person:
         # Mails envoyés : la part du soir augmente avec la dérive
         late_share = self.base_late_share + 0.35 * x
         for _ in range(_poisson(rng, scale * self.base_mails_out * (1 + 0.8 * x))):
-            h = rng.uniform(19, 23.9) if rng.random() < late_share else rng.uniform(self.day_start_h, 19)
-            out.append(self._ev("email_out", _at(day, h), n=rng.choice([1, 1, 1, 2, 3, 5]),
+            h = rng.uniform(19, 23.9) if rng.random() < late_share else self._work_hour(self.day_start_h)
+            out.append(self._ev("email_out", _at(day, h), n=_recipients(rng, RADOSLAW_RECIPIENTS_OUT),
                                 external=rng.random() < 0.25))
 
         # Mails reçus
         for _ in range(_poisson(rng, scale * self.base_mails_in * (1 + 0.5 * x))):
-            h = rng.uniform(19, 23.9) if rng.random() < 0.1 + 0.2 * x else rng.uniform(7.5, 19)
-            out.append(self._ev("email_in", _at(day, h), n=rng.choice([1, 1, 2, 4, 10]),
+            h = rng.uniform(19, 23.9) if rng.random() < 0.1 + 0.2 * x else self._work_hour(7.5)
+            out.append(self._ev("email_in", _at(day, h), n=_recipients(rng, RADOSLAW_RECIPIENTS_IN),
                                 external=rng.random() < 0.35))
         return out
+
+    def _work_hour(self, start_h: float, end_h: float = 19) -> float:
+        """Heure dans la journée de travail, selon le rythme réel observé dans Radoslaw."""
+        b = self.rng.choices(range(len(RADOSLAW_HOUR_PROFILE)), weights=RADOSLAW_HOUR_PROFILE)[0]
+        rel = (b + self.rng.random()) / len(RADOSLAW_HOUR_PROFILE)
+        return start_h + rel * (end_h - start_h)
 
     def _created(self, start: datetime, lead_h: float) -> datetime:
         """Date de création d'une réunion, placée en journée (on planifie rarement à 3h du matin)."""
@@ -138,6 +156,12 @@ class _Person:
 def _at(day: date, hour: float, step: int = 1) -> datetime:
     minutes = int(hour * 60) // step * step
     return datetime.combine(day, time()) + timedelta(minutes=minutes)
+
+
+def _recipients(rng: random.Random, shares: list[float]) -> int:
+    """Nombre de destinataires tiré selon la répartition réelle (10 = « 10 et plus »)."""
+    n = rng.choices(range(1, len(shares) + 1), weights=shares)[0]
+    return n if n < len(shares) else rng.randint(10, 25)
 
 
 def _poisson(rng: random.Random, lam: float) -> int:
