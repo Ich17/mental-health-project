@@ -45,8 +45,9 @@ INSTRUCTIONS = {
 
 def demo_rules() -> list[dict]:
     """Règle déjà appliquée chez Conseil Stratégie dans la cohorte simulée (data/simulate.py) : la Mesure en calcule l'effet."""
-    return [{"team_id": team_view.SEED_RULE["team_id"], "rule_text": team_view.SEED_RULE["rule_text"],
-             "start_date": team_view.rule_start_date(), "measured_effect": None, "status": "applied"}]
+    r = team_view.seed_rule()
+    return [{"team_id": r["team_id"], "rule_text": r["rule_text"],
+             "start_date": r["start_date"], "measured_effect": None, "status": "applied"}]
 
 
 def run(*, llm: LLM | None = None, store=None,
