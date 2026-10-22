@@ -55,7 +55,11 @@ def generate(n_people: int = 10, days: int = 91, end: date = DEFAULT_END,
             "onset_date": (start_day + timedelta(days=onset)).isoformat() if onset is not None else None,
         })
     events.sort(key=lambda e: (e.user_id, e.ts))
-    return events, truth
+    # Deux événements strictement identiques (même minute, même type…) n'en font qu'un.
+    unique: dict[tuple, WorkEvent] = {}
+    for e in events:
+        unique.setdefault(tuple(e.to_dict().values()), e)
+    return list(unique.values()), truth
 
 
 class _Person:
@@ -88,17 +92,20 @@ class _Person:
         scale = 0.25 if weekend else 1.0
         out: list[WorkEvent] = []
 
-        # Réunions
+        # Réunions (jamais deux en même temps pour une même personne)
+        busy: list[tuple[datetime, datetime]] = []
         for _ in range(_poisson(rng, scale * (self.base_meetings + 3.5 * x))):
             late = rng.random() < 0.03 + 0.30 * x
             start_h = rng.uniform(19, 21.5) if late else rng.uniform(self.day_start_h, 18)
             start = _at(day, start_h, step=15)
-            duration = rng.choice([30, 30, 45, 60, 60, 90])
+            end = start + timedelta(minutes=rng.choice([30, 30, 45, 60, 60, 90]))
             lead_h = rng.uniform(1, 20) if rng.random() < 0.08 + 0.45 * x else rng.uniform(26, 24 * 14)
-            out.append(self._ev("meeting", start, start + timedelta(minutes=duration),
-                                created=start - timedelta(hours=lead_h),
-                                n=rng.choice([2, 2, 3, 4, 5, 6, 8, 12]),
-                                external=rng.random() < 0.2))
+            n, external = rng.choice([2, 2, 3, 4, 5, 6, 8, 12]), rng.random() < 0.2
+            if any(start < b_end and b_start < end for b_start, b_end in busy):
+                continue
+            busy.append((start, end))
+            out.append(self._ev("meeting", start, end, created=self._created(start, lead_h),
+                                n=n, external=external))
 
         # Mails envoyés : la part du soir augmente avec la dérive
         late_share = self.base_late_share + 0.35 * x
@@ -113,6 +120,15 @@ class _Person:
             out.append(self._ev("email_in", _at(day, h), n=rng.choice([1, 1, 2, 4, 10]),
                                 external=rng.random() < 0.35))
         return out
+
+    def _created(self, start: datetime, lead_h: float) -> datetime:
+        """Date de création d'une réunion, placée en journée (on planifie rarement à 3h du matin)."""
+        created = start - timedelta(hours=lead_h)
+        if not 8 <= created.hour < 19:
+            created = created.replace(hour=self.rng.randint(8, 18), minute=self.rng.randint(0, 59))
+        if created >= start:
+            created = start - timedelta(minutes=self.rng.randint(30, 120))
+        return created.replace(second=0)
 
     def _ev(self, kind, start, end=None, created=None, n=1, external=False) -> WorkEvent:
         return make_event(self.user_id, self.team_id, kind, "sim", start, end=end,

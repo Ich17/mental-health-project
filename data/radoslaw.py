@@ -28,6 +28,8 @@ URL = "http://konect.cc/files/download.tsv.radoslaw_email.tar.bz2"
 TZ = ZoneInfo("Europe/Warsaw")
 WORKDAY = (7, 16)  # journée observée dans les données (pic 9h-15h)
 TEAM_ID = "manufacturing"
+# Bords incomplets coupés : on garde des semaines entières (lundi 4 janv. → jeudi 30 sept. 2010).
+PERIOD = (datetime(2010, 1, 4), datetime(2010, 10, 1))
 
 
 def download() -> Path:
@@ -42,17 +44,21 @@ def download() -> Path:
 
 
 def load_events() -> list[WorkEvent]:
-    recipients: dict[tuple[int, int], list[int]] = defaultdict(list)
+    # Nettoyage : un destinataire compte une seule fois par mail, et on retire les mails à soi-même.
+    recipients: dict[tuple[int, int], set[int]] = defaultdict(set)
     with download().open() as f:
         for line in f:
             if line.startswith("%"):
                 continue
-            sender, recipient, _weight, ts = line.split()
-            recipients[(int(sender), int(ts))].append(int(recipient))
+            sender, recipient, _weight, ts = (int(x) for x in line.split())
+            if recipient != sender:
+                recipients[(sender, ts)].add(recipient)
 
     events: list[WorkEvent] = []
     for (sender, ts), to in recipients.items():
         when = datetime.fromtimestamp(ts, TZ).replace(tzinfo=None)
+        if not (PERIOD[0] <= when < PERIOD[1]):
+            continue
         events.append(_event(sender, "email_out", when, len(to)))
         for r in to:
             events.append(_event(r, "email_in", when, len(to)))

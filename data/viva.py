@@ -30,13 +30,15 @@ CSV_URL = ("https://raw.githubusercontent.com/microsoft/vivainsights-py/"
 # Colonne Viva → notre nom. On ignore le reste (usage de Copilot, réseau…).
 COLUMNS = {
     "Collaboration_hours": "collaboration_h",
-    "Meeting_hours": "meeting_h",
+    # Meeting_hours et Call_hours sont incohérentes dans l'échantillon (jusqu'à 168 h/semaine,
+    # supérieures à la collaboration totale dans ~30 % des lignes) : on prend la colonne
+    # cohérente qui regroupe réunions et appels.
+    "Meeting_and_call_hours": "meeting_h",
     "Meetings": "meetings",
     "Conflicting_meeting_hours": "conflicting_meeting_h",
     "Email_hours": "email_h",
     "Emails_sent": "emails_sent",
     "Chat_hours": "chat_h",
-    "Call_hours": "call_h",
     "After_hours_collaboration_hours": "after_hours_h",
     "Weekend_collaboration_hours": "weekend_h",
     "Multitasking_hours": "multitasking_h",
@@ -71,6 +73,10 @@ def load_weekly() -> list[dict]:
             }
             for viva_col, ours in COLUMNS.items():
                 row[ours] = _num(r.get(viva_col))
+            # Nettoyage : une sous-partie ne peut pas dépasser le total de collaboration.
+            for part in ("after_hours_h", "multitasking_h"):
+                if row[part] is not None and row["collaboration_h"] is not None:
+                    row[part] = min(row[part], row["collaboration_h"])
             rows.append(row)
     rows.sort(key=lambda x: (x["user_id"], x["week"]))
     return rows
