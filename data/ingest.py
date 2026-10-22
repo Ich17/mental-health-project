@@ -6,6 +6,7 @@ Exemples (depuis la racine du repo) :
     python -m data.ingest google --only calendar
     python -m data.ingest mock --clickhouse    # + insertion dans ClickHouse (CLICKHOUSE_URL)
     python -m data.ingest viva                 # échantillon Microsoft Viva (hebdo, 300 pers.)
+    python -m data.ingest radoslaw             # vrais mails d'une entreprise industrielle (2010)
 
 Dans le code (agent, API) : `load_events()` lit le mode dans DATA_MODE (mock par défaut).
 """
@@ -25,6 +26,7 @@ RAW = Path(__file__).resolve().parent / "raw"
 MOCK_FILE = RAW / "work_events_sim.jsonl"
 MOCK_TRUTH = RAW / "work_events_sim_truth.json"
 GOOGLE_FILE = RAW / "work_events_google.jsonl"
+RADOSLAW_FILE = RAW / "work_events_radoslaw.jsonl"
 
 CLICKHOUSE_COLUMNS = ["user_id", "team_id", "ts", "end_ts", "kind", "created_ts",
                       "n_attendees", "is_external", "status", "source",
@@ -42,7 +44,12 @@ def load_events(mode: str | None = None) -> list[WorkEvent]:
         if not GOOGLE_FILE.exists():
             raise FileNotFoundError("Lancer d'abord : python -m data.ingest google")
         return list(read_jsonl(GOOGLE_FILE))
-    raise ValueError(f"DATA_MODE inconnu : {mode} (mock | google)")
+    if mode == "radoslaw":
+        if not RADOSLAW_FILE.exists():
+            from data import radoslaw
+            write_jsonl(radoslaw.load_events(), RADOSLAW_FILE)
+        return list(read_jsonl(RADOSLAW_FILE))
+    raise ValueError(f"DATA_MODE inconnu : {mode} (mock | google | radoslaw)")
 
 
 def simulate(**kwargs) -> list[WorkEvent]:
@@ -108,7 +115,7 @@ def summary(events: list[WorkEvent]) -> str:
 def main() -> None:
     load_dotenv()
     p = argparse.ArgumentParser(description="Ingestion des métadonnées de travail")
-    p.add_argument("mode", choices=["mock", "google", "viva"])
+    p.add_argument("mode", choices=["mock", "google", "viva", "radoslaw"])
     p.add_argument("--days", type=int, default=90, help="historique à récupérer (jours)")
     p.add_argument("--only", choices=["calendar", "gmail"], help="une seule source Google")
     p.add_argument("--regenerate", action="store_true", help="mock : recréer les données")
@@ -127,7 +134,13 @@ def main() -> None:
             print("Inséré dans ClickHouse (table work_weekly).")
         return
 
-    if args.mode == "mock":
+    if args.mode == "radoslaw":
+        from data import radoslaw
+
+        events = radoslaw.load_events()
+        write_jsonl(events, RADOSLAW_FILE)
+        print(f"Radoslaw : {RADOSLAW_FILE.relative_to(RAW.parent.parent)}")
+    elif args.mode == "mock":
         events = simulate() if args.regenerate or not MOCK_FILE.exists() else load_events("mock")
         print(f"Mock : {MOCK_FILE.relative_to(RAW.parent.parent)} (vérité : {MOCK_TRUTH.name})")
     else:
