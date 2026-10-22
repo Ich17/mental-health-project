@@ -1,0 +1,12 @@
+# Manifeste Aiven Runtime : Console → Runtime → Deploy application → scanner ce fichier.
+# Une seule app (Dockerfile à la racine, port 8000). Les bases existent déjà sur Aiven :
+# on les relie après le déploiement (Connected services → DATABASE_URL) et on ajoute
+# CLICKHOUSE_URL / ANTHROPIC_API_KEY dans « Environment variables ». Jamais de secret ici.
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: "8000"
+      USER_ID: ichane
