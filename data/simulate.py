@@ -164,8 +164,8 @@ def work_day(rng, p: Person, day: date, ctx: dict) -> tuple[list[dict], dict]:
         dur = float(rng.choice([0.5, 0.5, 1, 1, 1, 1.5, 2]))
         end = start + timedelta(hours=dur)
         lastmin = rng.random() < ctx["lastmin"] and not (ctx["rule"] and h >= 17)
-        created = start - (timedelta(hours=rng.uniform(0.5, 20)) if lastmin
-                           else timedelta(days=rng.uniform(1.2, 15)))
+        created = start - (timedelta(minutes=round(rng.uniform(30, 1200))) if lastmin
+                           else timedelta(minutes=round(rng.uniform(1.2, 15) * 1440)))
         status = "cancelled" if rng.random() < 0.05 else "confirmed"
         ev.append({"ts": start, "end_ts": end, "kind": "meeting", "created_ts": created,
                    "n_attendees": int(rng.integers(2, 12)), "is_external": int(rng.random() < ext),
@@ -189,10 +189,10 @@ def work_day(rng, p: Person, day: date, ctx: dict) -> tuple[list[dict], dict]:
 
     green = 0.0
     if n or n_in:
-        start = base + timedelta(hours=rng.normal(8.6, 0.4) + (2 if wd >= 5 else 0))
-        stop = max(last_end, base + timedelta(hours=rng.normal(18 + 2.5 * intensity, 1)))
+        start = base + timedelta(minutes=round(60 * (rng.normal(8.6, 0.4) + (2 if wd >= 5 else 0))))
+        stop = max(last_end, base + timedelta(minutes=round(60 * rng.normal(18 + 2.5 * intensity, 1))))
         if wd >= 5:
-            stop = min(stop, start + timedelta(hours=rng.uniform(1, 6) * intensity + 0.5))
+            stop = min(stop, start + timedelta(minutes=round(60 * (rng.uniform(1, 6) * intensity + 0.5))))
         green = max(0.0, (stop - start).total_seconds() / 3600)
         ev.append({"ts": start, "end_ts": stop, "kind": "presence_green"})
     f.update({"emails_in": n_in, "emails_out_after_21h": late_out, "green_hours": round(green, 2),
@@ -201,7 +201,7 @@ def work_day(rng, p: Person, day: date, ctx: dict) -> tuple[list[dict], dict]:
 
 
 def _simple(base, h, kind):
-    return {"ts": base + timedelta(hours=h), "end_ts": None, "kind": kind}
+    return {"ts": base + timedelta(seconds=round(h * 3600)), "end_ts": None, "kind": kind}
 
 
 # --- Récupération ----------------------------------------------------------------
@@ -218,7 +218,7 @@ def recovery_next(rng, p: Person, f: dict, wd_next: int, debt: float, cal: dict)
     sleep_dev = sleep_h - p.sleep_mu
     debt = 0.75 * debt + max(0.0, typical - load) * 0.25  # la charge s'accumule sur plusieurs jours
     rec = (p.rec_mu + (load - typical) - debt + 5.5 * sleep_dev + cal["weekday_recovery"][wd_next]
-           + rng.normal(0, cal["recovery_sd"] * 0.55 * p.noise))
+           + rng.normal(0, cal["recovery_sd"] * 0.8 * p.noise))
     rec = float(np.clip(rec, 3, 99))
     z = (rec - p.rec_mu) / 20
     bedtime_h = p.bedtime_h - min(sleep_cost, 0) * 0.6 + rng.normal(0, 0.4)
