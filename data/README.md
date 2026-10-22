@@ -31,6 +31,8 @@ Tous les fichiers produits vont dans `raw/` (ignoré par git).
 
 - `whoop.py` : Whoop → récupération, HRV, FC repos, sommeil, strain (une ligne par jour, format `recovery_daily`).
 - `check_whoop.py` : bilan qualité + nettoyage → `whoop_daily_clean.json` / `.csv` (Excel FR). Jours manquants, strain < 1 (montre pas portée), HRV sur nuit < 3 h et valeurs impossibles sont estimés par la moyenne des jours voisins ; la colonne `imputed` liste les champs estimés. Sans pandas.
+  Ajoute aussi 7 colonnes de travail **vides pour l'instant** (à simuler) : `emails_sent`, `emails_received`, `n_meetings`, `meeting_hours`, `emails_received_night`, `emails_sent_night` (19h → 6h, rattachés au jour D), `last_minute_meetings` (ajoutées < 24h avant).
+- `simulate_daily.py` : remplit ces 7 colonnes à partir de la récupération du lendemain (équipes `finance`, `conseil`, `juridique`, `ops`, variance δ par équipe, week-ends souvent off) → `raw/ichane_daily.csv`. Formules en tête du fichier.
 - Alignement : la ligne du jour D = récupération / HRV / sommeil de la nuit D-1 → D, et strain de la journée D. Pour les analyses, la charge du jour D s'apparie avec la récupération de D+1.
 - `simulate.py` : ~50 profils fictifs (agenda, mails, présence, récupération) pour la vue RH et le profil de secours `persona_demo`. Même format `work_events` que `events.py` (+ `kind=presence_green` pour le temps « vert » Teams) ; ses équipes (`ma`, `pe`, `conseil`, `levfin`, `restru`) ne touchent pas au mode mock.
 - `raw/` : exports JSON de secours (ignoré par git). `sim_out/` : sortie du simulateur (ignorée, régénérable).

@@ -16,6 +16,19 @@ RAW = Path(__file__).resolve().parent / "raw"
 BOUNDS = {"recovery": (0, 100), "hrv": (5, 250), "rhr": (30, 110), "sleep_h": (1.5, 14),
           "sleep_consistency": (0, 100), "strain": (0, 21)}
 
+# Colonnes de travail du jour D (métadonnées, jamais de contenu). Vides pour l'instant :
+# elles seront simulées en cohérence avec les données de santé.
+# « nuit » = de 19h le jour D à 6h le jour D+1, rattachée au jour D.
+WORK_COLUMNS = [
+    "emails_sent",            # nb de mails envoyés dans la journée
+    "emails_received",        # nb de mails reçus dans la journée
+    "n_meetings",             # nb de réunions dans la journée
+    "meeting_hours",          # durée totale des réunions (heures)
+    "emails_received_night",  # nb de mails reçus entre 19h et 6h
+    "emails_sent_night",      # nb de mails envoyés entre 19h et 6h
+    "last_minute_meetings",   # nb de réunions ajoutées moins de 24h avant leur début
+]
+
 
 def _load(name):
     f = RAW / f"whoop_{name}.json"
@@ -108,12 +121,14 @@ def clean(rows: list[dict]) -> tuple[list[dict], list[str]]:
                 r["bedtime"] = dt.isoformat(timespec="minutes")
     for r in out:
         r["imputed"] = ",".join(r["imputed"])
+        for k in WORK_COLUMNS:
+            r.setdefault(k, None)
     return out, notes
 
 
 def write_csv(rows: list[dict], path: Path) -> None:
     """CSV lisible dans Excel français (séparateur ; et virgule décimale)."""
-    cols = ["user_id", "team_id", "date", *METRICS, "bedtime", "source", "imputed"]
+    cols = ["user_id", "team_id", "date", *METRICS, "bedtime", "source", "imputed", *WORK_COLUMNS]
     fmt = lambda v: str(v).replace(".", ",") if isinstance(v, float) else ("" if v is None else str(v))  # noqa: E731
     lines = [";".join(cols)] + [";".join(fmt(r.get(c)) for c in cols) for r in rows]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
@@ -158,4 +173,5 @@ if __name__ == "__main__":
     print("\nCorrections :" if notes else "\nAucune correction nécessaire.")
     for n in notes:
         print("  " + n)
-    print("\n→ data/raw/whoop_daily_clean.json et .csv (colonne `imputed` = champs estimés)")
+    print("\n→ data/raw/whoop_daily_clean.json et .csv (colonne `imputed` = champs estimés ; "
+          "colonnes de travail vides, à simuler)")
