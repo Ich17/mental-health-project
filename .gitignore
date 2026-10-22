@@ -29,3 +29,4 @@ web/dist/
 
 # Cohorte simulée (régénérable : python -m data.simulate)
 data/sim_out/
+evidence/out/
