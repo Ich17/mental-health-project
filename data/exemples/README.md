@@ -11,7 +11,7 @@ ceux de la cible (juniors banque / conseil).
 |---|---|
 | `simulateur_extrait.csv` | **À ouvrir en premier.** Une semaine (12 → 18 oct.) de 2 salariés fictifs : `emp01` normal, `emp02` en dérive (réunions et mails le soir). Mails reçus retirés pour la lisibilité. |
 | `simulateur_verite.csv` | Qui dérive et depuis quand (10 personnes : 3 dérives, 1 rush ponctuel, 6 normales). |
-| `simulateur_complet.csv` | Le dataset complet du simulateur : 33 580 lignes, 10 personnes, 23 juil. → 21 oct. 2026 (trop gros pour l'aperçu GitHub : bouton « Download »). |
+| `simulateur_complet.csv` | Le dataset complet du simulateur : 33 092 lignes, 10 personnes, 23 juil. → 21 oct. 2026 (trop gros pour l'aperçu GitHub : bouton « Download »). |
 | `radoslaw_extrait.csv` | Février 2010 d'un vrai salarié de l'usine Radoslaw (mails seulement). |
 | `viva_extrait.csv` | 3 personnes × 35 semaines de l'échantillon Microsoft Viva (une ligne = une semaine). |
 
