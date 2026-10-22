@@ -21,3 +21,6 @@ web/dist/
 .DS_Store
 .idea/
 .vscode/
+
+# Cohorte simulée (régénérable : python -m data.simulate)
+data/sim_out/
