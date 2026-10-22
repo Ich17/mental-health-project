@@ -68,6 +68,61 @@ def evaluate_experiment(ctx: RunContext, experiment_id: int):
             "verdict": "garder" if change >= 5 else "abandonner"}
 
 
+MIN_BLOCK_DAYS = 2      # en dessous : trop tôt pour conclure
+EFFECT_POINTS = 5       # écart de récupération (points) à partir duquel on parle d'effet
+
+
+def evaluate_blocks(ctx: RunContext):
+    """Effet des blocs d'agenda acceptés : récupération après les jours protégés vs les autres jours ouvrés.
+
+    La ligne du jour J contient la récupération de la nuit suivante (contracts.get_daily_metrics),
+    donc un bloc posé le jour J se lit directement sur la ligne J.
+    """
+    rows = {r["date"]: r for r in contracts.get_daily_metrics(ctx.user_id, 42) if r.get("recovery") is not None}
+    blocks = [a for a in ctx.store.list_actions(ctx.user_id)
+              if a["kind"] == "calendar_block" and a["status"] in ("accepted", "done")]
+    by_purpose: dict[str, set[str]] = {}
+    for b in blocks:
+        day = b["payload"]["start"][:10]
+        if day in rows:
+            by_purpose.setdefault(b["payload"].get("purpose", "autre"), set()).add(day)
+    all_block_days = set().union(*by_purpose.values()) if by_purpose else set()
+    others = [r for d, r in rows.items() if d not in all_block_days and date.fromisoformat(d).weekday() < 5]
+
+    results = []
+    for purpose, days in sorted(by_purpose.items()):
+        with_block = [rows[d] for d in sorted(days)]
+        res = {"bloc": purpose, "jours_avec_bloc": len(with_block), "jours_comparables": len(others)}
+        if len(with_block) < MIN_BLOCK_DAYS or len(others) < MIN_BLOCK_DAYS:
+            results.append({**res, "verdict": "trop tôt", "note": f"au moins {MIN_BLOCK_DAYS} jours avec bloc nécessaires"})
+            continue
+        rec_with, rec_other = mean(r["recovery"] for r in with_block), mean(r["recovery"] for r in others)
+        mh_with, mh_other = mean(r["meeting_hours"] for r in with_block), mean(r["meeting_hours"] for r in others)
+        diff = round(rec_with - rec_other)
+        res.update(recuperation_avec_bloc=round(rec_with), recuperation_sans_bloc=round(rec_other),
+                   ecart_points=diff, heures_reunion_avec=round(mh_with, 1), heures_reunion_sans=round(mh_other, 1),
+                   verdict="efficace" if diff >= EFFECT_POINTS else "sans effet net")
+        if mh_other - mh_with > 1:   # journées protégées plus légères : l'effet peut venir de la charge
+            res["note"] = "les jours protégés étaient aussi moins chargés : effet à confirmer"
+        results.append(res)
+    return {"blocs": results, "note": None if results else "aucun bloc accepté sur les 6 dernières semaines"}
+
+
+def record_evaluation(ctx: RunContext, subject: str, verdict: str, effect_text: str, confidence: str):
+    """Garde un verdict en mémoire (table hypotheses, facteur « evaluation:<sujet> ») : l'Analyse le relira."""
+    if ctx.hypotheses_saved >= 3:
+        raise ToolError("3 enregistrements maximum par run")
+    factor = f"evaluation:{subject}"
+    text = f"{verdict} : {effect_text}"
+    known = ctx.store.get_memory(ctx.user_id)["hypotheses"]
+    if any(h["factor"] == factor and h["effect_text"] == text for h in known):
+        return {"deja_enregistre": True}
+    ctx.hypotheses_saved += 1
+    hid = ctx.store.save_hypothesis(ctx.user_id, factor=factor, effect_text=text,
+                                    effect_size=0.0, confidence=confidence)
+    return {"hypothesis_id": hid}
+
+
 def save_hypothesis(ctx: RunContext, factor: str, effect_text: str, effect_size: float, confidence: str):
     if ctx.hypotheses_saved >= 2:
         raise ToolError("2 hypothèses maximum par run")
@@ -140,6 +195,15 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          _obj(), get_memory),
     Tool("evaluate_experiment", "Mesure l'effet d'une expérience (récupération pendant vs avant).",
          _obj({"experiment_id": {"type": "integer"}}, ["experiment_id"]), evaluate_experiment),
+    Tool("evaluate_blocks", "Mesure l'effet des blocs d'agenda acceptés (déjeuner, sport…) : récupération après les "
+         "jours protégés vs les autres jours ouvrés, avec la charge de réunions pour comparer à charge égale.",
+         _obj(), evaluate_blocks),
+    Tool("record_evaluation", "Garde en mémoire le verdict d'une action ou d'une expérience (3 max par run).",
+         _obj({"subject": {"type": "string", "description": "ex. bloc_dejeuner, experience_3"},
+               "verdict": {"type": "string", "enum": ["efficace", "sans effet net", "trop tôt"]},
+               "effect_text": {"type": "string", "description": "effet chiffré en une phrase"},
+               "confidence": {"type": "string", "enum": ["faible", "moyenne", "forte"]}},
+              ["subject", "verdict", "effect_text", "confidence"]), record_evaluation),
     Tool("save_hypothesis", "Enregistre une hypothèse en mémoire (2 max par run).",
          _obj({"factor": {"type": "string"}, "effect_text": {"type": "string"},
                "effect_size": {"type": "number"},
@@ -160,7 +224,8 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
 
 AGENT_TOOLS: dict[str, list[str]] = {
     "detection": ["get_daily_metrics", "forecast_week", "assess_trend"],
-    "analyse": ["get_drivers", "get_memory", "evaluate_experiment", "save_hypothesis"],
+    "evaluateur": ["get_memory", "evaluate_experiment", "evaluate_blocks", "record_evaluation"],
+    "analyse": ["get_drivers", "get_memory", "save_hypothesis"],
     "action": ["get_free_slots", "propose_block", "start_experiment", "draft_message"],
 }
 

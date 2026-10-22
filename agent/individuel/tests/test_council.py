@@ -17,13 +17,13 @@ def test_full_week_run_agents_talk_to_each_other():
     r = council.run("ichane", "semaine", llm=ScriptedLLM(), store=store)
     assert r["status"] == "done"
     k = kinds(r)
-    # Détection -> Analyse, l'Analyse questionne la Détection, puis passe la main à l'Action
-    assert k[:5] == [("orchestrateur", "consigne"), ("detection", "signal"), ("analyse", "question"),
-                     ("detection", "reponse"), ("analyse", "analyse")]
+    # Détection -> Évaluateur -> Analyse, l'Analyse questionne la Détection, puis passe la main à l'Action
+    assert k[:6] == [("orchestrateur", "consigne"), ("detection", "signal"), ("evaluateur", "evaluation"),
+                     ("analyse", "question"), ("detection", "reponse"), ("analyse", "analyse")]
     assert ("action", "proposition") in k and k[-1] == ("action", "message_final")
     assert guardrails.check_text(r["final_message"]) == []
     # Les actions validées sont en attente du clic, jamais exécutées
-    actions = store.list_actions("ichane")
+    actions = [a for a in store.list_actions("ichane") if not a["payload"].get("demo")]   # hors historique de démo
     assert actions and all(a["status"] == "proposed" for a in actions)
     blocks = [a for a in actions if a["kind"] == "calendar_block"]
     assert all(b["payload"]["title"] == "Occupé" and b["payload"]["visibility"] == "private" for b in blocks)

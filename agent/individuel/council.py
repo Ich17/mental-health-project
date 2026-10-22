@@ -1,11 +1,14 @@
-"""L'orchestrateur : fait circuler la parole entre Détection, Analyse et Action.
+"""L'orchestrateur : fait circuler la parole entre Détection, Évaluateur, Analyse et Action.
 
 Déroulé par défaut (run « semaine ») :
 
-    Détection --signal--> Analyse --analyse--> Action --proposition--> revue (code)
-         ^                  |  ^                 |                         |
-         +----question------+  +----question-----+   <--- à corriger ------+
-                                                         validé -> message_final
+    Détection --signal--> Évaluateur --evaluation--> Analyse --analyse--> Action --proposition--> revue (code)
+         ^                                             |  ^                 |                         |
+         +-------------------question------------------+  +----question-----+   <--- à corriger ------+
+                                                                                   validé -> message_final
+
+- L'Évaluateur mesure ce qui a déjà été mis en place (blocs acceptés, expériences)
+  et le garde en mémoire : l'Analyse s'appuie sur ce qui marche vraiment.
 
 - Une question passe la parole au destinataire, sa réponse la rend à l'auteur.
   Une question maximum par agent et par run.
@@ -17,6 +20,7 @@ Déroulé par défaut (run « semaine ») :
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Callable
 
 import contracts
@@ -31,11 +35,12 @@ from agent.llm import LLM, default_llm
 from agent.memory import get_store
 from agent.toolkit import RunContext
 
-AGENTS = ["detection", "analyse", "action"]
+AGENTS = ["detection", "evaluateur", "analyse", "action"]
 PROMPTS = Path(__file__).with_name("prompts")
 # Types de messages que chaque agent a le droit de poster.
 AGENT_KINDS = {
     "detection": ["signal", "reponse"],
+    "evaluateur": ["evaluation", "reponse"],
     "analyse": ["analyse", "question", "reponse"],
     "action": ["proposition", "message_final", "question"],
 }
@@ -53,7 +58,9 @@ BRIEFS = {
 
 INSTRUCTIONS = {
     "detection": "Analyse les données et poste ton `signal` à l'analyse.",
-    "analyse": "Lis le signal, consulte les causes et la mémoire, puis poste ton `analyse` à l'action.",
+    "evaluateur": "Le signal est posé. Mesure l'effet de ce qui a déjà été mis en place, garde les verdicts "
+                  "en mémoire, puis poste ton `evaluation` à l'analyse.",
+    "analyse": "Lis le signal et l'évaluation, consulte les causes et la mémoire, puis poste ton `analyse` à l'action.",
     "action": "Construis le plan avec tes outils puis poste ta `proposition` à l'orchestrateur.",
 }
 
@@ -65,6 +72,7 @@ def run(user_id: str, kind: str = "semaine", question: str | None = None, *,
     llm = llm or default_llm(ScriptedLLM)
     store = store or get_store()
     store.seed(user_id)
+    _seed_past_blocks(store, user_id)
     ctx = RunContext(store=store, user_id=user_id)
     board = Board(run_kind=kind, subject=user_id)
     run_id = store.create_run(kind, user_id)
@@ -124,6 +132,10 @@ def run(user_id: str, kind: str = "semaine", question: str | None = None, *,
                 continue
 
             if msg.kind == "signal":
+                speaker, kinds, instruction = "evaluateur", None, INSTRUCTIONS["evaluateur"]
+                continue
+
+            if msg.kind == "evaluation":
                 speaker, kinds, instruction = "analyse", None, INSTRUCTIONS["analyse"]
                 continue
 
@@ -188,7 +200,7 @@ def run(user_id: str, kind: str = "semaine", question: str | None = None, *,
 
 
 def _default_kinds(agent: str) -> list[str]:
-    return {"detection": ["signal"], "analyse": ["analyse", "question"],
+    return {"detection": ["signal"], "evaluateur": ["evaluation"], "analyse": ["analyse", "question"],
             "action": ["proposition", "question"]}[agent]
 
 
@@ -200,3 +212,17 @@ def _fallback_message(red_days: int, actions: list[dict]) -> str:
         parts.append("Si ça dure, le médecin du travail ou un psy pris en charge par ta mutuelle "
                      "peuvent t'aider à faire le point.")
     return " ".join(parts)
+
+
+def _seed_past_blocks(store, user_id: str):
+    """Démo : quelques déjeuners protégés acceptés ces dernières semaines (données simulées),
+    pour que l'Évaluateur ait quelque chose à mesurer dès le premier run. Une seule fois."""
+    if any(a["kind"] == "calendar_block" for a in store.list_actions(user_id)):
+        return
+    today = date.today()
+    for i in range(25, 9, -1):
+        d = today - timedelta(days=i)
+        if d.weekday() in (1, 3):   # mardi et jeudi
+            store.add_action(user_id, "calendar_block", {
+                "start": f"{d}T12:30:00", "end": f"{d}T13:30:00", "purpose": "dejeuner",
+                "title": "Occupé", "visibility": "private", "demo": True}, status="done")
