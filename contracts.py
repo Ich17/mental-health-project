@@ -38,8 +38,17 @@ def _persona_demo(days: int = 42) -> list[dict]:
 
 
 def get_daily_metrics(user_id: str, days: int = 42) -> list[dict]:
-    """Indicateurs de charge du jour J + récupération à J+1, un dict par jour."""
-    return _persona_demo(42)[-days:]
+    """Indicateurs de charge du jour J + récupération à J+1, un dict par jour.
+
+    Vraies données ou simulateur via data/daily.py (DAILY_DATA=auto|real|sim|mock) ;
+    sans aucune source disponible, profil fictif `persona_demo` ci-dessus.
+    """
+    from data import daily
+
+    try:
+        return daily.daily_metrics(user_id, days)
+    except daily.NoDailyData:
+        return _persona_demo(42)[-days:]
 
 
 def get_drivers(user_id: str) -> list[dict]:
