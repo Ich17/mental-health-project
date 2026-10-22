@@ -61,6 +61,7 @@ def _results(messages: list[dict]) -> dict[str, object]:
     return out
 
 
+PEAKS = ("pic_passe", "pic_attendu")   # tendances d'assess_trend qui ne sont pas une dérive de fond
 JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
@@ -86,9 +87,11 @@ class ScriptedLLM:
     # ------------------------------------------------------------------ Détection
     def _detection(self, board, instruction, kinds, res) -> Reply:
         if "get_daily_metrics" not in res:
-            return Reply("tool_use", [_call("get_daily_metrics", days=42), _call("forecast_week")])
+            return Reply("tool_use", [_call("get_daily_metrics", days=42), _call("forecast_week"),
+                                      _call("assess_trend")])
         days = res["get_daily_metrics"][0]
         forecast = res["forecast_week"][0] if "forecast_week" in res else []
+        trend = res["assess_trend"][0] if "assess_trend" in res else {"tendance": "inconnue", "explication": ""}
 
         if kinds == ["reponse"]:
             recent = days[-14:]
@@ -105,16 +108,23 @@ class ScriptedLLM:
         drift = {k: _pct(avg(last, k), avg(base, k)) for k in
                  ("recovery", "hrv", "sleep_h", "meeting_hours", "last_minute_meetings")}
         red = [d["date"] for d in forecast if d["risk"] == "rouge"]
-        level = "rouge" if drift["recovery"] <= -20 or len(red) >= 3 else \
-                "orange" if drift["recovery"] <= -10 or red else "vert"
+        tendance = trend["tendance"]
+        if tendance in ("pic_passe", "stable"):      # le passé ne compte plus : seuls les jours à venir
+            level = "rouge" if len(red) >= 3 else "orange" if red else "vert"
+        elif tendance in ("pic_attendu", "baisse_recente"):
+            level = "rouge" if len(red) >= 3 else "orange"
+        else:
+            level = "rouge" if drift["recovery"] <= -20 or len(red) >= 3 else \
+                    "orange" if drift["recovery"] <= -10 or red else "vert"
         reasons = "; ".join(f"{_jour(d['date'])} ({d['predicted_recovery']}, {d['reason']})"
                             for d in forecast if d["risk"] == "rouge")
         return _post("analyse", "signal",
-                     f"Niveau {level}. Sur 7 jours vs la base des 4 semaines précédentes : récupération "
+                     f"Niveau {level}. Tendance : {tendance}. {trend['explication']} "
+                     f"Sur 7 jours vs la base des 4 semaines précédentes : récupération "
                      f"{drift['recovery']:+d} %, HRV {drift['hrv']:+d} %, sommeil {drift['sleep_h']:+d} %. "
                      f"Côté charge : réunions {drift['meeting_hours']:+d} %, calls ajoutés le jour même "
                      f"{drift['last_minute_meetings']:+d} %. Jours rouges à venir : {reasons or 'aucun'}.",
-                     {"niveau": level, "jours_rouges": red,
+                     {"niveau": level, "tendance": tendance, "jours_rouges": red,
                       "derives": {k: f"{v:+d} %" for k, v in drift.items()}})
 
     # ------------------------------------------------------------------ Analyse
@@ -128,7 +138,8 @@ class ScriptedLLM:
             return _post("action", "reponse",
                          "Deux causes ressortent : " + " ; ".join(f"{x['label'].lower()} ({x['effect']})" for x in d)
                          + "." + memo, {"causes": [x["factor"] for x in d]})
-        if "question" in kinds and "| reponse]" not in board:
+        peak = _board_data(board, "signal").get("tendance") in PEAKS
+        if "question" in kinds and "| reponse]" not in board and not peak:
             return _post("detection", "question",
                          "Les calls ajoutés le jour même expliquent-ils la baisse ? Donne-moi la récupération "
                          "moyenne après les jours chargés en calls de dernière minute vs les jours légers.")
@@ -144,7 +155,7 @@ class ScriptedLLM:
         valid = exp["rule_text"] if exp and str(exp.get("verdict", "")).startswith("garder") else None
         tested = (exp or {}).get("rule_text", "").lower()
         to_test = None
-        if "last_minute_meetings" in [d["factor"] for d in drivers] and "jour même" not in tested:
+        if "last_minute_meetings" in [d["factor"] for d in drivers] and "jour même" not in tested and not peak:
             to_test = "Refuser les calls ajoutés le jour même après 17h"
         answer = _board_data(board, "reponse")
         confirm = (f" La détection confirme : {answer['recup_jours_charges']} de récupération après les jours "
@@ -153,6 +164,9 @@ class ScriptedLLM:
         memo = (f" Déjà validé pour cette personne : « {exp['rule_text']} », {exp['verdict']}."
                 if valid else "")
         test = f" À tester : « {to_test} »." if to_test else ""
+        if peak:
+            causes = ("la baisse vient d'un pic de charge ponctuel, pas d'une cause de fond. "
+                      f"Facteurs habituels pour mémoire : {causes}")
         return _post("action", "analyse", f"Causes probables : {causes}.{confirm}{memo}{test}",
                      {"causes": [d["factor"] for d in drivers], "a_tester": to_test, "deja_valide": valid})
 
@@ -170,6 +184,7 @@ class ScriptedLLM:
                          (f"D'après tes données : {text} " if text else "")
                          + "Ce sont des hypothèses : on peut en tester une pendant deux semaines si tu veux.")
         red = signal.get("jours_rouges", [])[:2]
+        peak = signal.get("tendance") in PEAKS
 
         if "proposition" in kinds:
             if "get_free_slots" not in res and red:
@@ -177,7 +192,9 @@ class ScriptedLLM:
             if "propose_block" not in res and "start_experiment" not in res:
                 calls = [_call("propose_block", date=d, start="12:30", end="13:30", purpose="dejeuner")
                          for d in red]
-                if analysis.get("a_tester"):
+                if peak:
+                    pass  # pic ponctuel : pas d'expérience, on protège seulement les jours à risque
+                elif analysis.get("a_tester"):
                     calls.append(_call("start_experiment", rule_text=analysis["a_tester"], days=14))
                 elif analysis.get("deja_valide"):
                     calls.append(_call("start_experiment", rule_text=analysis["deja_valide"], days=14))
@@ -185,22 +202,37 @@ class ScriptedLLM:
                     return Reply("tool_use", calls)
             n_blocks = len(res.get("propose_block", []))
             exp = res.get("start_experiment", [{}])[0].get("payload", {}).get("rule_text")
+            if not n_blocks and not exp:
+                return _post("orchestrateur", "proposition",
+                             "Plan vide : la baisse était ponctuelle et aucun jour à risque n'arrive. "
+                             "Rien à bloquer cette semaine.")
             return _post("orchestrateur", "proposition",
                          f"Plan : {n_blocks} pause(s) déjeuner protégée(s) sur les jours rouges"
                          + (f", et une expérience de 14 jours : « {exp} »" if exp else "")
                          + ". Objectif : limiter la dette de récupération sur les jours à risque.")
 
         rec = int(signal.get("derives", {}).get("recovery", "0 %").replace(" %", ""))
-        trend = (f"Ta récupération a baissé de {-rec} % cette semaine par rapport à ton habitude, "
-                 "surtout après les jours chargés en calls ajoutés au dernier moment." if rec < 0 else
-                 "Ta récupération est stable par rapport à ton habitude.")
+        if signal.get("tendance") == "pic_passe":
+            trend = ("Ta récupération avait baissé pendant ta semaine très chargée, mais elle est revenue "
+                     "à ton niveau habituel : pas de dérive de fond.")
+        elif signal.get("tendance") == "pic_attendu":
+            trend = ("Ta récupération baisse cette semaine, pendant un pic de charge attendu. "
+                     "Je vérifie la semaine prochaine qu'elle remonte.")
+        elif rec < 0:
+            trend = (f"Ta récupération a baissé de {-rec} % cette semaine par rapport à ton habitude, "
+                     "surtout après les jours chargés en calls ajoutés au dernier moment.")
+        else:
+            trend = "Ta récupération est stable par rapport à ton habitude."
         parts = [trend]
         if red:
             n = "Une journée s'annonce difficile" if len(red) == 1 else f"{len(red)} journées s'annoncent difficiles"
             parts.append(f"{n} ({', '.join(_jour(d) for d in red)}) : je te propose d'y protéger ta pause déjeuner.")
-        if analysis.get("deja_valide"):
+        if analysis.get("deja_valide") and not peak:
             parts.append(f"La dernière fois, « {analysis['deja_valide']} » t'avait réussi.")
         if analysis.get("a_tester"):
             parts.append(f"Je te propose aussi de tester pendant 14 jours : « {analysis['a_tester']} ».")
-        parts.append("Tout est prêt : tu acceptes ou tu refuses en un clic.")
+        if red or analysis.get("a_tester") or (analysis.get("deja_valide") and not peak):
+            parts.append("Tout est prêt : tu acceptes ou tu refuses en un clic.")
+        else:
+            parts.append("Rien à bloquer cette semaine.")
         return _post("tous", "message_final", " ".join(parts))
