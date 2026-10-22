@@ -1,0 +1,26 @@
+# Optionnel : bases locales pour coder sans Aiven.
+#   docker compose up -d postgres clickhouse valkey   → juste les bases
+#   docker compose up --build                         → tout, app sur http://localhost:8000
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
+    ports: ["5432:5432"]
+    volumes: ["./data/sql/postgres.sql:/docker-entrypoint-initdb.d/01.sql:ro"]
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    environment: { CLICKHOUSE_USER: app, CLICKHOUSE_PASSWORD: app, CLICKHOUSE_DB: app }
+    ports: ["8123:8123"]
+    volumes: ["./data/sql/clickhouse.sql:/docker-entrypoint-initdb.d/01.sql:ro"]
+  valkey:
+    image: valkey/valkey:8
+    ports: ["6379:6379"]
+  app:
+    build: .
+    ports: ["8000:8000"]
+    env_file: [{ path: .env, required: false }]
+    environment:
+      DATABASE_URL: postgresql://app:app@postgres:5432/app
+      CLICKHOUSE_URL: http://app:app@clickhouse:8123/app
+      VALKEY_URL: redis://valkey:6379
+    depends_on: [postgres, clickhouse, valkey]

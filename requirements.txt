@@ -1,0 +1,12 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+psycopg[binary]==3.2.3
+clickhouse-connect==0.8.11
+redis==5.2.1
+httpx==0.28.1
+pandas==2.2.3
+numpy==2.2.1
+apscheduler==3.11.0
+anthropic==0.42.0
+python-dotenv==1.0.1
+pytest==8.3.4
