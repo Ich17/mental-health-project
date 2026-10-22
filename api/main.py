@@ -11,11 +11,13 @@ load_dotenv()
 
 import contracts  # noqa: E402
 from api import db  # noqa: E402
+from api.agent_routes import router as agent_router  # noqa: E402
 
 USER_ID = os.getenv("USER_ID", "ichane")
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
 app = FastAPI(title="Mental Health Project")
+app.include_router(agent_router)
 
 
 @app.get("/health")
