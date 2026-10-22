@@ -70,6 +70,19 @@ def test_clean_fills_gaps_and_flags_imputed():
     assert out[0]["imputed"] == "" and len(notes) >= 4
 
 
+def test_clean_adds_empty_work_columns(tmp_path):
+    from data.check_whoop import WORK_COLUMNS, clean, write_csv
+
+    row = {"user_id": "u", "team_id": "t", "date": "2026-10-01", "recovery": 40, "hrv": 80, "rhr": 55,
+           "sleep_h": 7, "sleep_consistency": 60, "strain": 10, "bedtime": "2026-10-01T00:30",
+           "source": "whoop"}
+    out, _ = clean([row])
+    assert len(WORK_COLUMNS) == 7 and all(out[0][k] is None for k in WORK_COLUMNS)
+    write_csv(out, tmp_path / "x.csv")
+    header = (tmp_path / "x.csv").read_text(encoding="utf-8-sig").splitlines()[0].split(";")
+    assert header[-7:] == WORK_COLUMNS
+
+
 def test_ongoing_cycle_has_no_strain():
     ongoing = {"id": 1, "end": None, "score": {"strain": 3.1}}
     [row] = to_daily([RECOVERY], [SLEEP], [ongoing])
