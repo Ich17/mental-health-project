@@ -27,6 +27,7 @@ TEAMS = {
 }
 DAY_RANGE = {5: (-0.3, 0.2), 6: (-0.35, 0.15)}  # samedi, dimanche ; sinon semaine
 WEEKDAY_RANGE = (0.8, 1.2)
+DROP = ("source", "imputed")  # inutiles dans la base finale (gardés dans whoop_daily_clean)
 RECOVERY_WEIGHT = 0.3   # 1 écart-type de récup en moins le lendemain → +30 % de charge
 SENT_RATIO = 0.4        # mails envoyés ≈ 40 % des reçus
 MEETING_H = 0.75        # durée moyenne d'une réunion
@@ -52,7 +53,7 @@ def simulate(rows: list[dict], team: str = "finance", seed: int = 42) -> list[di
         received = round(jitter(p["emails_received"] * load))
         sent = round(jitter(received * SENT_RATIO))
         night = min(0.6, p["night"] * load)
-        out.append({**r, "team_id": team,
+        out.append({**{k: v for k, v in r.items() if k not in DROP}, "team_id": team,
                     "n_meetings": n_meet,
                     "meeting_hours": round(min(MAX_MEETING_H, jitter(n_meet * MEETING_H)) * 4) / 4,
                     "emails_received": received,
@@ -89,6 +90,6 @@ if __name__ == "__main__":
     rows = json.loads((RAW / "whoop_daily_clean.json").read_text())
     rows = simulate(sorted(rows, key=lambda r: r["date"]), a.team, a.seed)
     (RAW / "ichane_daily.json").write_text(json.dumps(rows, indent=1))
-    write_csv(rows, RAW / "ichane_daily.csv")
+    write_csv(rows, RAW / "ichane_daily.csv", drop=DROP)
     print("\n".join(summary(rows)))
     print("\n→ data/raw/ichane_daily.csv (ouvre-le dans Excel) et .json")

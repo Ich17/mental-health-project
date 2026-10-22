@@ -18,7 +18,7 @@ def test_fills_all_work_columns_consistently():
         assert all(r[k] is not None and r[k] >= 0 for k in WORK_COLUMNS)
         assert r["emails_received_night"] <= r["emails_received"]
         assert r["last_minute_meetings"] <= r["n_meetings"] and r["meeting_hours"] <= 11
-        assert r["team_id"] == "finance"
+        assert r["team_id"] == "finance" and "source" not in r and "imputed" not in r
     weekend = [r for r in out if date.fromisoformat(r["date"]).weekday() >= 5]
     assert any(r["n_meetings"] == 0 and r["emails_received"] == 0 for r in weekend)
     assert simulate(_rows()) == out  # reproductible (graine fixe)
