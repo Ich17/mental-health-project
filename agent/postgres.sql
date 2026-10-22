@@ -6,3 +6,9 @@ CREATE TABLE IF NOT EXISTS experiments (id SERIAL PRIMARY KEY, user_id TEXT REFE
 CREATE TABLE IF NOT EXISTS actions (id SERIAL PRIMARY KEY, user_id TEXT REFERENCES users(id), kind TEXT, payload JSONB, status TEXT CHECK (status IN ('proposed','accepted','rejected','done')), created_at TIMESTAMPTZ DEFAULT now());
 CREATE TABLE IF NOT EXISTS feedback (id SERIAL PRIMARY KEY, user_id TEXT REFERENCES users(id), action_id INT REFERENCES actions(id), rating INT, comment TEXT, created_at TIMESTAMPTZ DEFAULT now());
 CREATE TABLE IF NOT EXISTS team_rules (id SERIAL PRIMARY KEY, team_id TEXT, rule_text TEXT, start_date DATE, measured_effect TEXT, created_at TIMESTAMPTZ DEFAULT now());
+
+-- Délibérations des agents : chaque run et chaque message échangé (écran « ce que les agents se sont dit »).
+ALTER TABLE team_rules ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'applied';  -- suggested | applied | measured | dismissed
+CREATE TABLE IF NOT EXISTS agent_runs (id SERIAL PRIMARY KEY, run_kind TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running', final_message TEXT, created_at TIMESTAMPTZ DEFAULT now(), finished_at TIMESTAMPTZ);
+CREATE TABLE IF NOT EXISTS agent_messages (id SERIAL PRIMARY KEY, run_id INT REFERENCES agent_runs(id), author TEXT NOT NULL, recipient TEXT NOT NULL, kind TEXT NOT NULL, content TEXT NOT NULL, data JSONB, ts TIMESTAMPTZ DEFAULT now());
+CREATE INDEX IF NOT EXISTS agent_messages_run ON agent_messages(run_id);
