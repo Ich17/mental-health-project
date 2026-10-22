@@ -296,8 +296,10 @@ def load_clickhouse(data: dict) -> None:
     load_dotenv()
     client = clickhouse_connect.get_client(dsn=os.environ["CLICKHOUSE_URL"],
                                           secure=os.environ["CLICKHOUSE_URL"].startswith("https"))
-    for stmt in (Path(__file__).parent / "clickhouse.sql").read_text().split(";"):
-        sql = "\n".join(l for l in stmt.splitlines() if not l.strip().startswith("--")).strip()
+    schema = (Path(__file__).parent / "clickhouse.sql").read_text(encoding="utf-8")
+    # On retire les lignes de commentaire AVANT de couper sur « ; » (un commentaire peut en contenir).
+    schema = "\n".join(line for line in schema.splitlines() if not line.strip().startswith("--"))
+    for sql in (s.strip() for s in schema.split(";")):
         if sql:
             client.command(sql)
     # On ne remplace que la cohorte (ses équipes), pas les données mock de data/simulate_work.py.
