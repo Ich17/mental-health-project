@@ -177,7 +177,14 @@ def _local(ts: str, offset: str | None) -> datetime:
 
 def to_daily(recovery: list[dict], sleep: list[dict], cycle: list[dict],
              user_id: str = "ichane", team_id: str = "demo") -> list[dict]:
-    """Une ligne par jour. `date` = jour du réveil (la récupération WHOOP est celle du matin)."""
+    """Une ligne par jour D (jour du réveil).
+
+    - recovery / hrv / rhr / sleep_* : mesurés pendant la nuit D-1 → D, donc ils reflètent la
+      journée D-1 et la nuit ;
+    - strain : effort de la journée D (le cycle WHOOP qui commence au réveil du jour D et finit
+      au coucher suivant). Il pèse donc sur la récupération de D+1.
+    Les analyses doivent apparier la charge du jour D avec la récupération de D+1.
+    """
     sleeps = {s["id"]: s for s in sleep if not s.get("nap") and s.get("score_state") == "SCORED"}
     cycles = {c["id"]: c for c in cycle}
     rows = {}
@@ -203,7 +210,9 @@ def to_daily(recovery: list[dict], sleep: list[dict], cycle: list[dict],
             "sleep_h": round(asleep_ms / 3_600_000, 2),
             "sleep_consistency": float(sl["score"].get("sleep_consistency_percentage") or 0),
             "bedtime": _local(sl["start"], sl.get("timezone_offset")).isoformat(timespec="minutes"),
-            "strain": round(float((cy.get("score") or {}).get("strain") or 0), 1),
+            # cycle en cours (pas de fin) ou absent → strain inconnu, pas 0
+            "strain": (round(float(cy["score"]["strain"]), 1)
+                       if cy.get("end") and (cy.get("score") or {}).get("strain") is not None else None),
             "source": "whoop",
         }
     return [rows[d] for d in sorted(rows)]
