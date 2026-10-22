@@ -1,9 +1,11 @@
 import pytest
 
-from agent import council, guardrails
+from agent import guardrails
+from agent.individuel import council
 from agent.memory import InMemoryMemory
-from agent.scripted import ScriptedLLM, _post
-from agent.tools import RunContext, ToolError, run_tool
+from agent.individuel.scripted import ScriptedLLM, _post
+from agent.individuel.tools import TOOLS
+from agent.toolkit import RunContext, ToolError, run_tool
 
 
 def kinds(result):
@@ -69,15 +71,15 @@ def test_final_message_falls_back_to_safe_text():
 def test_agents_only_get_their_own_tools():
     ctx = RunContext(store=InMemoryMemory(), user_id="ichane")
     with pytest.raises(ToolError):
-        run_tool(ctx, "get_daily_metrics", {}, allowed=["get_free_slots"])
+        run_tool(ctx, TOOLS, "get_daily_metrics", {}, allowed=["get_free_slots"])
 
 
 def test_blocks_must_fit_free_slots():
     ctx = RunContext(store=InMemoryMemory(), user_id="ichane")
     with pytest.raises(ToolError):
-        run_tool(ctx, "propose_block", {"date": "2026-10-26", "start": "10:00", "end": "11:00",
+        run_tool(ctx, TOOLS, "propose_block", {"date": "2026-10-26", "start": "10:00", "end": "11:00",
                                         "purpose": "focus"}, allowed=["propose_block"])
-    out = run_tool(ctx, "propose_block", {"date": "2026-10-26", "start": "12:30", "end": "13:30",
+    out = run_tool(ctx, TOOLS, "propose_block", {"date": "2026-10-26", "start": "12:30", "end": "13:30",
                                           "purpose": "dejeuner"}, allowed=["propose_block"])
     assert out["payload"]["title"] == "Occupé"
     assert len(ctx.draft_actions) == 1

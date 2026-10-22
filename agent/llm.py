@@ -2,7 +2,7 @@
 
 Deux implémentations :
 - `ClaudeLLM`  : le vrai Claude via le SDK Anthropic (tool use).
-- `ScriptedLLM` (dans scripted.py) : un « cerveau de démo » déterministe qui
+- `ScriptedLLM` (individuel/scripted.py, team/scripted.py) : un « cerveau de démo » déterministe qui
   appelle les mêmes outils et poste des messages construits à partir de leurs
   résultats. Sert aux tests, à la CI et au plan B si la clé API ou le réseau
   lâchent pendant la démo.
@@ -58,11 +58,10 @@ class ClaudeLLM:
         return Reply(stop_reason=resp.stop_reason, blocks=blocks)
 
 
-def default_llm() -> LLM:
-    """Claude si une clé est configurée et AGENT_MODE != scripted, sinon le script."""
+def default_llm(scripted_factory) -> LLM:
+    """Claude si une clé est configurée et AGENT_MODE != scripted, sinon le
+    cerveau de démo du package appelant (individuel ou team)."""
     mode = os.getenv("AGENT_MODE", "auto")
     if mode == "live" or (mode == "auto" and os.getenv("ANTHROPIC_API_KEY")):
         return ClaudeLLM()
-    from agent.scripted import ScriptedLLM
-
-    return ScriptedLLM()
+    return scripted_factory()

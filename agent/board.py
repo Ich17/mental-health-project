@@ -11,7 +11,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
 
-AgentName = Literal["detection", "analyse", "action", "orchestrateur", "personne"]
+AgentName = Literal[
+    "detection", "analyse", "action",   # agent/individuel
+    "observateur", "conseiller",        # agent/team
+    "orchestrateur", "personne",
+]
 
 # Types de messages : ils pilotent qui parle ensuite (voir council.py).
 MessageKind = Literal[

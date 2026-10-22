@@ -21,13 +21,24 @@ from typing import Callable
 
 import contracts
 from agent import guardrails
+from pathlib import Path
+
 from agent.agents import Agent
 from agent.board import Board, Message
+from agent.individuel.scripted import ScriptedLLM
+from agent.individuel.tools import AGENT_TOOLS, TOOLS
 from agent.llm import LLM, default_llm
 from agent.memory import get_store
-from agent.tools import RunContext
+from agent.toolkit import RunContext
 
 AGENTS = ["detection", "analyse", "action"]
+PROMPTS = Path(__file__).with_name("prompts")
+# Types de messages que chaque agent a le droit de poster.
+AGENT_KINDS = {
+    "detection": ["signal", "reponse"],
+    "analyse": ["analyse", "question", "reponse"],
+    "action": ["proposition", "message_final", "question"],
+}
 RECIPIENTS = AGENTS + ["orchestrateur"]
 MAX_TURNS = 12
 MAX_REVISIONS = 2
@@ -51,7 +62,7 @@ def run(user_id: str, kind: str = "semaine", question: str | None = None, *,
         llm: LLM | None = None, store=None,
         on_message: Callable[[dict], None] | None = None,
         on_start: Callable[[int], None] | None = None) -> dict:
-    llm = llm or default_llm()
+    llm = llm or default_llm(ScriptedLLM)
     store = store or get_store()
     store.seed(user_id)
     ctx = RunContext(store=store, user_id=user_id)
@@ -59,7 +70,7 @@ def run(user_id: str, kind: str = "semaine", question: str | None = None, *,
     run_id = store.create_run(kind, user_id)
     if on_start:
         on_start(run_id)
-    agents = {name: Agent(name) for name in AGENTS}
+    agents = {name: Agent(name, PROMPTS, TOOLS, AGENT_TOOLS[name], AGENT_KINDS[name]) for name in AGENTS}
     trace: list[dict] = []
     red_days = sum(d["risk"] == "rouge" for d in contracts.forecast_week(user_id))
 

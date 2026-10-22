@@ -11,7 +11,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 import contracts
-from agent import council
+from agent.individuel import council
+from agent.team import council as team_council
 from agent.memory import get_store
 
 router = APIRouter(prefix="/api")
@@ -49,6 +50,12 @@ def start_run(req: RunRequest):
     if "run_id" not in box:
         raise HTTPException(500, "le run n'a pas démarré")
     return {"run_id": box["run_id"], "status": "running"}
+
+
+@router.post("/agent/team-runs/{team_id}")
+def start_team_run(team_id: str):
+    """Délibération des agents d'équipe (agrégats uniquement). Synchrone pour l'instant."""
+    return team_council.run(team_id)
 
 
 @router.get("/agent/runs")

@@ -1,4 +1,4 @@
-"""Outils des agents et droits d'accès.
+"""Outils des agents individuels (Détection, Analyse, Action) et leurs droits.
 
 Principe de confidentialité appliqué par le code :
 - l'identité de la personne (user_id) vient du contexte du run,
@@ -6,44 +6,16 @@ Principe de confidentialité appliqué par le code :
   les données de quelqu'un d'autre ;
 - chaque agent ne reçoit que les outils de sa ligne dans AGENT_TOOLS ;
 - aucun outil n'écrit dans l'agenda. Les outils d'action remplissent un
-  brouillon de plan, enregistré seulement si le Gardien l'approuve, puis
+  brouillon de plan, enregistré seulement si la revue du code l'approuve, puis
   exécuté seulement si l'utilisateur clique (route API).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import date, timedelta
 from statistics import mean
-from typing import Any, Callable
 
 import contracts
-
-
-@dataclass
-class RunContext:
-    store: Any                         # agent.memory.InMemoryMemory ou PostgresMemory
-    user_id: str | None = None
-    draft_actions: list[dict] = field(default_factory=list)
-    hypotheses_saved: int = 0
-
-
-class ToolError(Exception):
-    """Erreur renvoyée à l'agent (il peut corriger son appel)."""
-
-
-@dataclass
-class Tool:
-    name: str
-    description: str
-    schema: dict
-    fn: Callable[..., Any]
-
-    def spec(self) -> dict:
-        return {"name": self.name, "description": self.description, "input_schema": self.schema}
-
-
-def _obj(props: dict | None = None, required: list[str] | None = None) -> dict:
-    return {"type": "object", "properties": props or {}, "required": required or []}
+from agent.toolkit import RunContext, Tool, ToolError, obj as _obj
 
 
 # ---------------------------------------------------------------------------
@@ -184,11 +156,3 @@ AGENT_TOOLS: dict[str, list[str]] = {
     "action": ["get_free_slots", "propose_block", "start_experiment", "draft_message"],
 }
 
-
-def run_tool(ctx: RunContext, name: str, args: dict, allowed: list[str]):
-    if name not in allowed:
-        raise ToolError(f"outil « {name} » non autorisé pour cet agent")
-    try:
-        return TOOLS[name].fn(ctx, **args)
-    except TypeError as e:
-        raise ToolError(f"arguments invalides : {e}") from e

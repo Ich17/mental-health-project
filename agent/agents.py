@@ -1,4 +1,6 @@
 """Un agent = un rôle (prompt) + ses outils + une boucle tool-use.
+Classe commune : les agents individuels et les agents d'équipe l'utilisent
+avec leurs propres prompts, outils et types de messages.
 
 Chaque tour d'un agent :
 1. il lit le tableau (toute la discussion jusqu'ici) et la consigne de l'orchestrateur ;
@@ -13,31 +15,23 @@ from pathlib import Path
 
 from agent.board import Board, Message
 from agent.llm import LLM
-from agent.tools import AGENT_TOOLS, TOOLS, RunContext, ToolError, run_tool
+from agent.toolkit import RunContext, Tool, ToolError, run_tool
 
-PROMPTS = Path(__file__).with_name("prompts")
 MAX_STEPS = 6
-
-# Types de messages que chaque agent a le droit de poster.
-AGENT_KINDS: dict[str, list[str]] = {
-    "detection": ["signal", "reponse"],
-    "analyse": ["analyse", "question", "reponse"],
-    "action": ["proposition", "message_final", "question"],
-}
 
 
 @dataclass
 class Agent:
     name: str
+    prompts_dir: Path                  # contient commun.md et <name>.md
+    tools: dict[str, Tool]             # registre d'outils du package (individuel ou team)
+    tool_names: list[str]              # outils auxquels CET agent a droit
+    kinds: list[str]                   # types de messages qu'il peut poster
 
     @property
     def system(self) -> str:
-        return (PROMPTS / "commun.md").read_text(encoding="utf-8") + "\n\n" + \
-               (PROMPTS / f"{self.name}.md").read_text(encoding="utf-8")
-
-    @property
-    def tool_names(self) -> list[str]:
-        return AGENT_TOOLS[self.name]
+        return (self.prompts_dir / "commun.md").read_text(encoding="utf-8") + "\n\n" + \
+               (self.prompts_dir / f"{self.name}.md").read_text(encoding="utf-8")
 
     def post_message_spec(self, recipients: list[str], kinds: list[str]) -> dict:
         return {
@@ -60,8 +54,8 @@ class Agent:
                   trace: list[dict] | None = None) -> Message:
         """`kinds` restreint les types de message autorisés à ce tour
         (ex. seulement `reponse` quand l'agent doit répondre à une question)."""
-        kinds = [k for k in (kinds or AGENT_KINDS[self.name]) if k in AGENT_KINDS[self.name]]
-        tools = [TOOLS[n].spec() for n in self.tool_names] + [self.post_message_spec(recipients, kinds)]
+        kinds = [k for k in (kinds or self.kinds) if k in self.kinds]
+        tools = [self.tools[n].spec() for n in self.tool_names] + [self.post_message_spec(recipients, kinds)]
         messages: list[dict] = [{"role": "user", "content": (
             f"## Tableau partagé\n\n{board.transcript() or '(vide)'}\n\n"
             f"## Consigne de l'orchestrateur\n\n{instruction}")}]
@@ -83,7 +77,7 @@ class Agent:
                         results.append(_result(call, str(e), error=True))
                     continue
                 try:
-                    out = run_tool(ctx, call["name"], call["input"], self.tool_names)
+                    out = run_tool(ctx, self.tools, call["name"], call["input"], self.tool_names)
                     results.append(_result(call, out))
                 except ToolError as e:
                     out = str(e)

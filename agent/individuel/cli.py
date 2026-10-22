@@ -1,10 +1,10 @@
 """Lancer une délibération depuis le terminal.
 
-    python -m agent.cli                         # run « semaine », mode auto
-    python -m agent.cli --kind jour
-    python -m agent.cli --kind chat --question "Pourquoi je suis à plat le jeudi ?"
-    python -m agent.cli --scripted              # sans clé API
-    python -m agent.cli --trace                 # affiche aussi les appels d'outils
+    python -m agent.individuel.cli                         # run « semaine », mode auto
+    python -m agent.individuel.cli --kind jour
+    python -m agent.individuel.cli --kind chat --question "Pourquoi je suis à plat le jeudi ?"
+    python -m agent.individuel.cli --scripted              # sans clé API
+    python -m agent.individuel.cli --trace                 # affiche aussi les appels d'outils
 """
 import argparse
 import json
@@ -13,7 +13,8 @@ import os
 from dotenv import load_dotenv
 
 COLORS = {"detection": "\033[36m", "analyse": "\033[35m", "action": "\033[32m",
-          "orchestrateur": "\033[33m", "personne": "\033[34m"}
+          "orchestrateur": "\033[33m", "personne": "\033[34m",
+          "observateur": "\033[36m", "conseiller": "\033[32m"}
 RESET, DIM = "\033[0m", "\033[2m"
 
 
@@ -37,7 +38,7 @@ def main():
     if args.scripted:
         os.environ["AGENT_MODE"] = "scripted"
 
-    from agent import council
+    from agent.individuel import council
 
     result = council.run(args.user, args.kind, args.question, on_message=show)
     print(f"\n{DIM}run #{result['run_id']} : {result['status']}, "

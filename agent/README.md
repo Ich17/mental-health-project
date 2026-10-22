@@ -1,66 +1,55 @@
-# agent/ : trois agents qui délibèrent
+# agent/ : les agents qui délibèrent
 
-Détection, Analyse et Action se parlent sur un tableau partagé avant de proposer quoi que ce soit à la personne. Chaque agent est un vrai agent Claude (boucle tool use du SDK Anthropic), avec son propre prompt et **ses propres outils**. Ce n'est pas un seul appel LLM.
+Deux familles d'agents, une mécanique commune.
 
 ```
-Détection --signal--> Analyse --analyse--> Action --proposition--> revue (code)
-     ^                  |  ^                 |                         |
-     +----question------+  +----question-----+   <--- à corriger ------+
-                                                     validé -> message_final
+agent/
+├── individuel/     agents du salarié : Détection, Analyse, Action      → Ichane
+├── team/           agents de l'entreprise : Observateur, Conseiller    → Thomas
+│
+├── agents.py       classe Agent : prompt + outils + boucle tool use     ┐
+├── board.py        tableau partagé (messages entre agents)              │
+├── toolkit.py      Tool, RunContext, contrôle des droits sur les outils │  commun :
+├── guardrails.py   contrôles déterministes (CLAUDE.md §3)               │  à modifier
+├── memory.py       mémoire Postgres, ou en mémoire vive sans DB         │  à deux
+├── llm.py          client Claude ; AGENT_MODE = auto | live | scripted  │
+├── postgres.sql    schéma de la mémoire                                 ┘
+└── tests/          tests du code commun
 ```
 
-| Agent | Rôle | Outils |
-|---|---|---|
-| Détection | Dérives vs la base perso, jours rouges à venir | `get_daily_metrics`, `forecast_week` |
-| Analyse | Causes + mémoire (ce qui a déjà marché) | `get_drivers`, `get_memory`, `evaluate_experiment`, `save_hypothesis` |
-| Action | Plan : blocs d'agenda, expérience, brouillon de message | `get_free_slots`, `propose_block`, `start_experiment`, `draft_message` |
+Chaque dossier (`individuel/`, `team/`) a la même forme : `council.py` (l'orchestrateur), `tools.py` (outils et droits de chaque agent), `prompts/` (un fichier par agent + `commun.md`), `scripted.py` (cerveau de démo sans clé API), `cli.py`, `tests/`. On peut donc travailler en parallèle sans se marcher dessus : seuls les fichiers communs demandent de se prévenir.
 
 ## Lancer
 
 ```bash
-python -m agent.cli --scripted               # sans clé API (cerveau de démo déterministe)
-python -m agent.cli                          # avec Claude si ANTHROPIC_API_KEY est défini
-python -m agent.cli --kind chat --question "Pourquoi je suis à plat le lundi ?"
-python -m agent.cli --trace                  # affiche aussi les appels d'outils
-python -m pytest -q agent/tests
+python -m agent.individuel.cli --scripted        # sans clé API
+python -m agent.individuel.cli --trace           # avec Claude si ANTHROPIC_API_KEY est défini
+python -m agent.individuel.cli --kind chat --question "Pourquoi je suis à plat le lundi ?"
+python -m agent.team.cli --team ma --scripted
+python -m pytest -q api/tests agent
 ```
 
-Sans `DATABASE_URL`, la mémoire est en mémoire vive. Avec, tout va dans Postgres (`postgres.sql`).
+Sans `DATABASE_URL`, la mémoire est en mémoire vive. Avec, tout va dans Postgres.
 
-## Fichiers
+## Le principe
 
-| Fichier | Rôle |
-|---|---|
-| `council.py` | L'orchestrateur : qui parle, quand, et la revue du plan |
-| `agents.py` | Un agent = prompt + outils + boucle tool use, terminée par `post_message` |
-| `tools.py` | Les outils et les droits de chaque agent (`AGENT_TOOLS`) |
-| `guardrails.py` | Contrôles déterministes de la section 3 du CLAUDE.md |
-| `board.py` | Messages et tableau partagé |
-| `memory.py` | Mémoire Postgres, ou en mémoire vive sans `DATABASE_URL` |
-| `llm.py` | Client Claude ; `AGENT_MODE` = auto, live ou scripted |
-| `scripted.py` | Cerveau de démo : mêmes outils, mêmes données, pas d'appel LLM |
-| `prompts/` | Un prompt par agent, plus `commun.md` |
+Les agents ne s'appellent pas directement : chacun poste un message (`to`, `kind`, `content`, `data`) sur le tableau partagé, et l'orchestrateur donne la parole au destinataire. Un agent peut poser une `question` à un autre, qui répond, puis la parole revient. Chaque tour d'agent est une vraie boucle tool use, terminée obligatoirement par l'outil `post_message`.
 
 ## Ce qui est garanti par le code (pas par les prompts)
 
-- Un agent n'a que ses outils. Le `user_id` vient du contexte du run, jamais d'un argument du LLM.
-- Aucun agent n'écrit dans l'agenda. Les outils d'action remplissent un brouillon ; l'orchestrateur le relit et l'enregistre en `proposed` ; seule la route `POST /api/actions/{id}/accept` l'exécute, après le clic.
-- Titre « Occupé » et visibilité privée imposés dans `propose_block` et dans `contracts.create_calendar_block`.
-- Revue du plan : vocabulaire interdit (stress, humeur, émotion, diagnostic…), blocs conformes, orientation obligatoire si 3 jours rouges ou plus. 2 révisions maximum, puis les actions non conformes sont écartées. Un message final non conforme est remplacé par un texte sûr écrit par le code.
-- Une question maximum par agent et par run, 12 tours maximum.
+- Un agent n'a que ses outils (`AGENT_TOOLS` dans chaque `tools.py`). Le `user_id` ou le `team_id` vient du contexte du run, jamais d'un argument du LLM.
+- Aucun agent n'écrit dans l'agenda. Les outils d'action remplissent un brouillon, l'orchestrateur le relit, puis l'enregistre en `proposed`. Seule la route `POST /api/actions/{id}/accept` l'exécute, après le clic.
+- Titre « Occupé » et visibilité privée imposés dans `propose_block` et `contracts.create_calendar_block`.
+- Revue par le code : vocabulaire interdit (stress, humeur, émotion, diagnostic…), orientation obligatoire si 3 jours rouges ou plus, jamais d'effectif < 8 ni d'identifiant côté équipe. Un texte final non conforme est remplacé par un texte sûr.
+- Une équipe trop petite (`insufficient_group`) ne déclenche même pas les agents d'équipe.
 
 ## Routes API (`api/agent_routes.py`)
 
 | Route | Effet |
 |---|---|
-| `POST /api/agent/runs` `{"kind": "semaine" \| "jour" \| "chat", "question": ...}` | Lance un run en arrière-plan, renvoie `run_id` |
-| `GET /api/agent/runs/{id}` | Le run et tous ses messages : à interroger chaque seconde pour afficher la discussion en direct |
+| `POST /api/agent/runs` `{"kind": "semaine" \| "jour" \| "chat", "question": ...}` | Lance un run individuel en arrière-plan, renvoie `run_id` |
+| `GET /api/agent/runs/{id}` | Le run et ses messages : à interroger chaque seconde pour afficher la discussion en direct |
 | `GET /api/agent/runs` | Historique des runs |
 | `GET /api/actions?status=proposed` | Actions en attente du clic |
 | `POST /api/actions/{id}/accept` / `reject` | Exécute ou refuse une action |
-
-## Prochaines étapes
-
-- Tester en mode live avec une vraie clé, et ajuster les prompts.
-- Brancher le planificateur (dimanche 19h : `semaine`, chaque matin : `jour`) dans l'API.
-- Agent RH : même mécanique, outils `team_trends` (agrégats n ≥ 8) ; `guardrails.check_hr_text` est déjà prêt.
+| `POST /api/agent/team-runs/{team_id}` | Délibération des agents d'équipe |

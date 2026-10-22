@@ -71,7 +71,13 @@ class InMemoryMemory:
             self._insert("hypotheses", {"user_id": user_id, **h})
         for e in rows["experiments"]:
             self._insert("experiments", {"user_id": user_id, **e})
-        for r in rows["team_rules"]:
+        self.seed_team(team_id)
+
+    def seed_team(self, team_id: str):
+        """Règle d'équipe passée avec effet mesuré (démo de la boucle d'apprentissage RH)."""
+        if self.team_rules(team_id):
+            return
+        for r in _seed_rows("", team_id)["team_rules"]:
             self._insert("team_rules", r)
 
     # --- lecture pour les agents
@@ -189,8 +195,7 @@ class PostgresMemory(InMemoryMemory):
             self._insert("hypotheses", {"user_id": user_id, **h})
         for e in rows["experiments"]:
             self._insert("experiments", {"user_id": user_id, **e})
-        for r in rows["team_rules"]:
-            self._insert("team_rules", r)
+        self.seed_team(team_id)
 
     def get_memory(self, user_id):
         q = lambda sql: self._q(sql, (user_id,))  # noqa: E731
