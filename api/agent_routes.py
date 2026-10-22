@@ -5,6 +5,7 @@ secondes pour afficher les messages au fur et à mesure que les agents se parlen
 """
 import os
 import threading
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
@@ -25,13 +26,9 @@ class RunRequest(BaseModel):
     wait: bool = False  # True : attend la fin du run (tests, CLI) ; False : renvoie l'id tout de suite
 
 
-@router.post("/agent/runs")
-def start_run(req: RunRequest):
-    if req.kind == "chat" and not req.question:
-        raise HTTPException(422, "question obligatoire en mode chat")
-    if req.wait:
-        return council.run(USER_ID, req.kind, req.question)
-
+def _in_background(run_fn) -> dict:
+    """Lance un run dans un thread et renvoie son id dès qu'il est créé.
+    Le front suit ensuite la discussion via GET /api/agent/runs/{id}."""
     started = threading.Event()
     box: dict = {}
 
@@ -41,7 +38,7 @@ def start_run(req: RunRequest):
 
     def target():
         try:
-            council.run(USER_ID, req.kind, req.question, on_start=on_start, on_message=lambda m: None)
+            run_fn(on_start=on_start, on_message=lambda m: None)
         finally:
             started.set()
 
@@ -52,10 +49,25 @@ def start_run(req: RunRequest):
     return {"run_id": box["run_id"], "status": "running"}
 
 
-@router.post("/agent/team-runs/{team_id}")
-def start_team_run(team_id: str):
-    """Délibération des agents d'équipe (agrégats uniquement). Synchrone pour l'instant."""
-    return team_council.run(team_id)
+@router.post("/agent/runs")
+def start_run(req: RunRequest):
+    if req.kind == "chat" and not req.question:
+        raise HTTPException(422, "question obligatoire en mode chat")
+    if req.wait:
+        return council.run(USER_ID, req.kind, req.question)
+    return _in_background(lambda **kw: council.run(USER_ID, req.kind, req.question, **kw))
+
+
+class TeamRunRequest(BaseModel):
+    wait: bool = False
+
+
+@router.post("/agent/team-runs")
+def start_team_run(req: TeamRunRequest = TeamRunRequest()):
+    """Revue d'entreprise par les agents d'équipe (agrégats uniquement)."""
+    if req.wait:
+        return team_council.run()
+    return _in_background(team_council.run)
 
 
 @router.get("/agent/runs")
@@ -106,3 +118,42 @@ def reject_action(action_id: int):
         raise HTTPException(404, "action introuvable")
     store.set_action_status(action_id, "rejected")
     return {"action_id": action_id, "status": "rejected"}
+
+
+# --- Vue RH : agrégats et règles d'équipe ------------------------------------
+
+@router.get("/team/overview")
+def team_overview():
+    """Unités affichables (n ≥ 8, sinon département en bloc). Aucune donnée individuelle."""
+    return contracts.company_overview()
+
+
+@router.get("/team/rules")
+def team_rules():
+    return get_store().team_rules()
+
+
+def _rule_or_404(rule_id: int) -> dict:
+    rule = get_store().get_team_rule(rule_id)
+    if rule is None:
+        raise HTTPException(404, "règle introuvable")
+    return rule
+
+
+@router.post("/team/rules/{rule_id}/apply")
+def apply_rule(rule_id: int):
+    """La RH applique une règle suggérée : la Mesure en évaluera l'effet aux runs suivants."""
+    rule = _rule_or_404(rule_id)
+    if rule["status"] != "suggested":
+        raise HTTPException(409, f"règle déjà {rule['status']}")
+    get_store().update_team_rule(rule_id, status="applied", start_date=date.today().isoformat())
+    return _rule_or_404(rule_id)
+
+
+@router.post("/team/rules/{rule_id}/dismiss")
+def dismiss_rule(rule_id: int):
+    rule = _rule_or_404(rule_id)
+    if rule["status"] != "suggested":
+        raise HTTPException(409, f"règle déjà {rule['status']}")
+    get_store().update_team_rule(rule_id, status="dismissed")
+    return _rule_or_404(rule_id)

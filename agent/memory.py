@@ -3,8 +3,9 @@
 - `PostgresMemory` : utilisée dès que DATABASE_URL est défini (Aiven).
 - `InMemoryMemory` : même interface, pour coder et tester sans base.
 
-Les deux sont pré-remplies (`seed`) avec une expérience terminée et une règle
-d'équipe mesurée, pour montrer la boucle d'apprentissage en démo (CLAUDE.md §7).
+`seed` pré-remplit une expérience individuelle terminée, `seed_team_rules`
+une règle d'équipe appliquée (dont l'agent Mesure calcule l'effet), pour
+montrer la boucle d'apprentissage en démo (CLAUDE.md §7).
 """
 from __future__ import annotations
 
@@ -37,10 +38,6 @@ def _seed_rows(user_id: str, team_id: str) -> dict:
             start_date=(today - timedelta(days=35)).isoformat(),
             end_date=(today - timedelta(days=21)).isoformat(),
             baseline_recovery=48.0, result_recovery=53.8, verdict="garder (+12 % de récupération)")],
-        "team_rules": [dict(
-            team_id=team_id, rule_text="Pas d'ajout de réunion le jour même après 17h",
-            start_date=(today - timedelta(days=28)).isoformat(),
-            measured_effect="+6 points de récupération moyenne en 4 semaines", status="applied")],
     }
 
 
@@ -71,13 +68,12 @@ class InMemoryMemory:
             self._insert("hypotheses", {"user_id": user_id, **h})
         for e in rows["experiments"]:
             self._insert("experiments", {"user_id": user_id, **e})
-        self.seed_team(team_id)
 
-    def seed_team(self, team_id: str):
-        """Règle d'équipe passée avec effet mesuré (démo de la boucle d'apprentissage RH)."""
-        if self.team_rules(team_id):
+    def seed_team_rules(self, rules: list[dict]):
+        """Règles d'équipe de démo (une seule fois, si la table est vide)."""
+        if self.team_rules():
             return
-        for r in _seed_rows("", team_id)["team_rules"]:
+        for r in rules:
             self._insert("team_rules", r)
 
     # --- lecture pour les agents
@@ -90,8 +86,17 @@ class InMemoryMemory:
         return next((e for e in self.data["experiments"]
                      if e["id"] == experiment_id and e["user_id"] == user_id), None)
 
-    def team_rules(self, team_id: str) -> list[dict]:
-        return [r for r in self.data["team_rules"] if r["team_id"] == team_id]
+    def team_rules(self, team_id: str | None = None) -> list[dict]:
+        return [r for r in self.data["team_rules"] if team_id is None or r["team_id"] == team_id]
+
+    def get_team_rule(self, rule_id: int) -> dict | None:
+        return next((r for r in self.data["team_rules"] if r["id"] == rule_id), None)
+
+    def update_team_rule(self, rule_id: int, **fields):
+        """Fait avancer une règle : suggested -> applied (start_date) -> measured (measured_effect)."""
+        r = self.get_team_rule(rule_id)
+        if r:
+            r.update(fields)
 
     # --- écriture
     def save_hypothesis(self, user_id: str, **h) -> int:
@@ -119,6 +124,7 @@ class InMemoryMemory:
             a["status"] = status
 
     def suggest_team_rule(self, team_id: str, rule_text: str) -> int:
+        """team_id = unité affichable (équipe ou département, voir data/cohort.py)."""
         return self._insert("team_rules", dict(team_id=team_id, rule_text=rule_text, start_date=None,
                                                measured_effect=None, status="suggested"))
 
@@ -195,7 +201,6 @@ class PostgresMemory(InMemoryMemory):
             self._insert("hypotheses", {"user_id": user_id, **h})
         for e in rows["experiments"]:
             self._insert("experiments", {"user_id": user_id, **e})
-        self.seed_team(team_id)
 
     def get_memory(self, user_id):
         q = lambda sql: self._q(sql, (user_id,))  # noqa: E731
@@ -210,8 +215,20 @@ class PostgresMemory(InMemoryMemory):
         return self._q("SELECT * FROM experiments WHERE id = %s AND user_id = %s",
                        (experiment_id, user_id), one=True)
 
-    def team_rules(self, team_id):
+    def team_rules(self, team_id=None):
+        if team_id is None:
+            return self._q("SELECT * FROM team_rules ORDER BY id")
         return self._q("SELECT * FROM team_rules WHERE team_id = %s ORDER BY id", (team_id,))
+
+    def get_team_rule(self, rule_id):
+        return self._q("SELECT * FROM team_rules WHERE id = %s", (rule_id,), one=True)
+
+    def update_team_rule(self, rule_id, **fields):
+        allowed = {"status", "start_date", "measured_effect"}
+        cols = [k for k in fields if k in allowed]
+        if cols:
+            self._q(f"UPDATE team_rules SET {', '.join(f'{c} = %s' for c in cols)} WHERE id = %s",
+                    (*[fields[c] for c in cols], rule_id))
 
     def get_action(self, action_id):
         return self._q("SELECT * FROM actions WHERE id = %s", (action_id,), one=True)

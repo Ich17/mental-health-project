@@ -5,7 +5,7 @@ Deux familles d'agents, une mécanique commune.
 ```
 agent/
 ├── individuel/     agents du salarié : Détection, Analyse, Action      → Ichane
-├── team/           agents de l'entreprise : Observateur, Conseiller    → Thomas
+├── team/           agents de l'entreprise : Observateur, Mesure, Conseiller → Thomas
 │
 ├── agents.py       classe Agent : prompt + outils + boucle tool use     ┐
 ├── board.py        tableau partagé (messages entre agents)              │
@@ -25,7 +25,7 @@ Chaque dossier (`individuel/`, `team/`) a la même forme : `council.py` (l'orche
 python -m agent.individuel.cli --scripted        # sans clé API
 python -m agent.individuel.cli --trace           # avec Claude si ANTHROPIC_API_KEY est défini
 python -m agent.individuel.cli --kind chat --question "Pourquoi je suis à plat le lundi ?"
-python -m agent.team.cli --team ma --scripted
+python -m agent.team.cli --scripted
 python -m pytest -q api/tests agent
 ```
 
@@ -41,7 +41,7 @@ Les agents ne s'appellent pas directement : chacun poste un message (`to`, `kind
 - Aucun agent n'écrit dans l'agenda. Les outils d'action remplissent un brouillon, l'orchestrateur le relit, puis l'enregistre en `proposed`. Seule la route `POST /api/actions/{id}/accept` l'exécute, après le clic.
 - Titre « Occupé » et visibilité privée imposés dans `propose_block` et `contracts.create_calendar_block`.
 - Revue par le code : vocabulaire interdit (stress, humeur, émotion, diagnostic…), orientation obligatoire si 3 jours rouges ou plus, jamais d'effectif < 8 ni d'identifiant côté équipe. Un texte final non conforme est remplacé par un texte sûr.
-- Une équipe trop petite (`insufficient_group`) ne déclenche même pas les agents d'équipe.
+- Côté équipe, une équipe de moins de 8 personnes n'est jamais exposée seule : son département est présenté en bloc (`data/cohort.py`).
 
 ## Routes API (`api/agent_routes.py`)
 
@@ -52,4 +52,5 @@ Les agents ne s'appellent pas directement : chacun poste un message (`to`, `kind
 | `GET /api/agent/runs` | Historique des runs |
 | `GET /api/actions?status=proposed` | Actions en attente du clic |
 | `POST /api/actions/{id}/accept` / `reject` | Exécute ou refuse une action |
-| `POST /api/agent/team-runs/{team_id}` | Délibération des agents d'équipe |
+| `POST /api/agent/team-runs` | Revue d'entreprise par les agents d'équipe |
+| `GET /api/team/overview`, `GET /api/team/rules`, `POST /api/team/rules/{id}/apply` | Vue RH et cycle de vie des règles (voir `team/README.md`) |
