@@ -9,7 +9,7 @@ RUN npm run build
 # 2) API Python qui sert aussi le front buildé
 FROM python:3.12-slim
 WORKDIR /app
-COPY requirements.txt ./
+COPY api/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 COPY --from=web /web/dist ./web/dist
