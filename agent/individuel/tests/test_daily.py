@@ -56,3 +56,49 @@ def test_contracts_falls_back_to_mock_without_data(monkeypatch):
 
 def test_contracts_uses_daily_when_available(sim_dir):
     assert contracts.get_daily_metrics("ichane")[0]["source"] == "sim"
+
+
+# --- Source ClickHouse (daily_base) --------------------------------------------------
+
+BASE = [  # santé de la nuit D-1 → D + travail du jour D, comme dans daily_base
+    {"date": "2026-10-19", "recovery": 70.0, "hrv": 60.0, "sleep_h": 7.5, "n_meetings": 6, "meeting_hours": 5.5,
+     "last_minute_meetings": 3, "emails_received": 120, "emails_received_night": 15},
+    {"date": "2026-10-20", "recovery": 35.0, "hrv": 41.2, "sleep_h": 5.94, "n_meetings": 2, "meeting_hours": 1.0,
+     "last_minute_meetings": 0, "emails_received": 40, "emails_received_night": 1},
+    {"date": "2026-10-21", "recovery": None, "hrv": None, "sleep_h": None, "n_meetings": 0, "meeting_hours": 0.0,
+     "last_minute_meetings": 0, "emails_received": 10, "emails_received_night": 0},
+]
+
+
+def test_daily_base_pairs_load_with_next_night():
+    rows = daily._daily_from_base(BASE)
+    assert [r["date"] for r in rows] == ["2026-10-19"]     # le 20 n'a pas de récupération le lendemain
+    r = rows[0]
+    assert (r["meeting_hours"], r["last_minute_meetings"], r["emails_in"], r["emails_night"]) == (5.5, 3, 120, 15)
+    assert (r["recovery"], r["hrv"], r["sleep_h"]) == (35, 41, 5.9)   # nuit du 19 au 20
+    assert r["meetings_after_20h"] is None and r["source"] == "clickhouse"
+
+
+def test_clickhouse_used_first_when_configured(monkeypatch):
+    monkeypatch.setenv("DAILY_DATA", "auto")
+    monkeypatch.setenv("CLICKHOUSE_URL", "https://u:p@example.invalid:1")
+    monkeypatch.setattr(daily, "_query_daily_base", lambda uid: BASE)
+    assert contracts.get_daily_metrics("ichane")[0]["source"] == "clickhouse"
+
+
+def test_clickhouse_down_falls_back(monkeypatch, sim_dir):
+    monkeypatch.setenv("DAILY_DATA", "auto")
+    monkeypatch.setenv("CLICKHOUSE_URL", "https://u:p@example.invalid:1")
+
+    def down(uid):
+        raise ConnectionError("injoignable")
+
+    monkeypatch.setattr(daily, "_query_daily_base", down)
+    assert contracts.get_daily_metrics("ichane")[0]["source"] == "sim"
+
+
+def test_mock_mode_never_calls_clickhouse(monkeypatch):
+    monkeypatch.setenv("DAILY_DATA", "mock")
+    monkeypatch.setenv("CLICKHOUSE_URL", "https://u:p@example.invalid:1")
+    monkeypatch.setattr(daily, "_query_daily_base", lambda uid: pytest.fail("ClickHouse appelé en mode mock"))
+    assert "source" not in contracts.get_daily_metrics("ichane")[0]
