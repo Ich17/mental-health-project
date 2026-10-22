@@ -33,9 +33,9 @@ ALTER TABLE work_events ADD COLUMN IF NOT EXISTS is_weekend UInt8 DEFAULT 0;
 CREATE TABLE IF NOT EXISTS work_weekly (
   user_id String, team_id String, level LowCardinality(String), week Date,
   source LowCardinality(String),        -- viva
-  collaboration_h Nullable(Float32), meeting_h Nullable(Float32), meetings Nullable(Float32),
+  collaboration_h Nullable(Float32), meeting_h Nullable(Float32),  -- meeting_h = réunions + appels meetings Nullable(Float32),
   conflicting_meeting_h Nullable(Float32), email_h Nullable(Float32), emails_sent Nullable(Float32),
-  chat_h Nullable(Float32), call_h Nullable(Float32), after_hours_h Nullable(Float32),
+  chat_h Nullable(Float32), after_hours_h Nullable(Float32),
   weekend_h Nullable(Float32), multitasking_h Nullable(Float32),
   collaboration_span_h Nullable(Float32), active_connected_h Nullable(Float32),
   wellbeing Nullable(Float32), workload Nullable(Float32), work_life_balance Nullable(Float32)
