@@ -169,8 +169,10 @@ def to_clickhouse(rows: list[dict]) -> None:
     if not url:
         raise SystemExit("CLICKHOUSE_URL absent du fichier .env (voir .env.example)")
     client = clickhouse_connect.get_client(dsn=url, secure=url.startswith("https"))
-    for stmt in (Path(__file__).parent / "clickhouse.sql").read_text().split(";"):
-        sql = "\n".join(line for line in stmt.splitlines() if not line.strip().startswith("--")).strip()
+    schema = (Path(__file__).parent / "clickhouse.sql").read_text(encoding="utf-8")
+    # On retire les lignes de commentaire AVANT de couper sur « ; » (un commentaire peut en contenir).
+    schema = "\n".join(line for line in schema.splitlines() if not line.strip().startswith("--"))
+    for sql in (s.strip() for s in schema.split(";")):
         if sql:
             client.command(sql)
     client.command("TRUNCATE TABLE daily_base")

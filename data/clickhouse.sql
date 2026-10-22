@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS work_weekly (
 ) ENGINE = ReplacingMergeTree ORDER BY (user_id, week);
 
 -- Base quotidienne santé + travail (data/simulate_daily.py) : une ligne par personne et par jour.
--- Ichane = vraie santé WHOOP ; travail et cohorte (5 équipes × 8) simulés. Jamais de contenu.
+-- Ichane = vraie santé WHOOP, travail et cohorte (5 équipes × 8) simulés. Jamais de contenu.
 CREATE TABLE IF NOT EXISTS daily_base (
   user_id String, team_id LowCardinality(String), date Date,
   recovery Nullable(Float32), hrv Nullable(Float32), rhr Nullable(Float32),
