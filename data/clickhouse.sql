@@ -40,3 +40,14 @@ CREATE TABLE IF NOT EXISTS work_weekly (
   collaboration_span_h Nullable(Float32), active_connected_h Nullable(Float32),
   wellbeing Nullable(Float32), workload Nullable(Float32), work_life_balance Nullable(Float32)
 ) ENGINE = ReplacingMergeTree ORDER BY (user_id, week);
+
+-- Base quotidienne santé + travail (data/simulate_daily.py) : une ligne par personne et par jour.
+-- Ichane = vraie santé WHOOP ; travail et cohorte (5 équipes × 8) simulés. Jamais de contenu.
+CREATE TABLE IF NOT EXISTS daily_base (
+  user_id String, team_id LowCardinality(String), date Date,
+  recovery Nullable(Float32), hrv Nullable(Float32), rhr Nullable(Float32),
+  sleep_h Nullable(Float32), sleep_consistency Nullable(Float32), strain Nullable(Float32),
+  bedtime Nullable(DateTime),
+  emails_sent UInt16, emails_received UInt16, n_meetings UInt16, meeting_hours Float32,
+  emails_received_night UInt16, emails_sent_night UInt16, last_minute_meetings UInt16
+) ENGINE = ReplacingMergeTree ORDER BY (team_id, user_id, date);

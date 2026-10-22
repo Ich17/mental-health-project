@@ -3,6 +3,7 @@
     python -m data.simulate_daily     # lit data/raw/whoop_daily_clean.json
                                       # → data/raw/ichane_daily.csv (Ichane seul)
                                       # → data/raw/team_daily.csv (Ichane + cohorte simulée, même période)
+    python -m data.simulate_daily --clickhouse   # + envoie team_daily dans ClickHouse (CLICKHOUSE_URL du .env)
 
 Formules (validées avec Boss le 2026-10-22) :
 - facteur du jour, tiré uniformément : semaine U(0,8 ; 1,2) ; week-end selon l'équipe (plage qui descend
@@ -150,6 +151,36 @@ def team_summary(rows: list[dict]) -> list[str]:
     return lines
 
 
+DAILY_COLUMNS = ["user_id", "team_id", "date", *METRICS, "bedtime",
+                 "emails_sent", "emails_received", "n_meetings", "meeting_hours",
+                 "emails_received_night", "emails_sent_night", "last_minute_meetings"]
+
+
+def to_clickhouse(rows: list[dict]) -> None:
+    """Crée les tables (data/clickhouse.sql) et remplace le contenu de daily_base."""
+    import os
+    from pathlib import Path
+
+    import clickhouse_connect
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    url = os.getenv("CLICKHOUSE_URL")
+    if not url:
+        raise SystemExit("CLICKHOUSE_URL absent du fichier .env (voir .env.example)")
+    client = clickhouse_connect.get_client(dsn=url)
+    for stmt in (Path(__file__).parent / "clickhouse.sql").read_text().split(";"):
+        sql = "\n".join(line for line in stmt.splitlines() if not line.strip().startswith("--")).strip()
+        if sql:
+            client.command(sql)
+    client.command("TRUNCATE TABLE daily_base")
+    conv = {"date": date.fromisoformat, "bedtime": lambda v: v and datetime.fromisoformat(v)}
+    data = [[conv.get(c, lambda v: v)(r.get(c)) for c in DAILY_COLUMNS] for r in rows]
+    client.insert("daily_base", data, column_names=DAILY_COLUMNS)
+    n = client.query("SELECT count(), uniqExact(user_id) FROM daily_base").result_rows[0]
+    print(f"ClickHouse : {n[0]} lignes, {n[1]} personnes dans daily_base")
+
+
 def summary(rows: list[dict]) -> list[str]:
     week = [r for r in rows if date.fromisoformat(r["date"]).weekday() < 5]
     wkend = [r for r in rows if date.fromisoformat(r["date"]).weekday() >= 5]
@@ -172,6 +203,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--team", default="finance", choices=TEAMS)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--clickhouse", action="store_true", help="envoie aussi team_daily dans ClickHouse")
     a = ap.parse_args()
     base = sorted(json.loads((RAW / "whoop_daily_clean.json").read_text()), key=lambda r: r["date"])
     rows = simulate(base, a.team, a.seed)
@@ -182,4 +214,6 @@ if __name__ == "__main__":
     (RAW / "team_daily.json").write_text(json.dumps(cohort, indent=1))
     write_csv(cohort, RAW / "team_daily.csv", drop=DROP)
     print("\nÉquipes :\n" + "\n".join(team_summary(cohort)))
+    if a.clickhouse:
+        to_clickhouse(cohort)
     print("\n→ data/raw/ichane_daily.csv (toi seul) et data/raw/team_daily.csv (40 salariés), à ouvrir dans Excel")
