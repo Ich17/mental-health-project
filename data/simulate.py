@@ -251,8 +251,9 @@ def simulate(weeks: int = 8, future_days: int = 14, seed: int = 42, cal: dict | 
     users = pd.DataFrame([{"user_id": p.user_id, "team_id": p.team_id, "team_name": TEAMS[p.team_id][0]}
                           for p in people])
     work = pd.DataFrame(events).sort_values(["user_id", "ts"]).reset_index(drop=True)
-    work = work[["user_id", "team_id", "ts", "end_ts", "kind", "created_ts", "n_attendees",
-                 "is_external", "status", "source"]]
+    work = _derived(work)[["user_id", "team_id", "ts", "end_ts", "kind", "created_ts", "n_attendees",
+                           "is_external", "status", "source", "duration_min", "is_after_hours",
+                           "is_weekend"]]
     rec = pd.DataFrame(rec_rows)[["user_id", "team_id", "date", "recovery", "hrv", "rhr", "sleep_h",
                                   "sleep_consistency", "bedtime", "strain", "source"]]
     rule_start = today - timedelta(days=27)  # = team_context : weeks_left < 4
@@ -263,6 +264,19 @@ def simulate(weeks: int = 8, future_days: int = 14, seed: int = 42, cal: dict | 
     }
     return {"users": users, "work_events": work, "recovery_daily": rec,
             "truth": {"calibration": cal, "stories": stories, "people": truth}}
+
+
+def _derived(work: pd.DataFrame) -> pd.DataFrame:
+    """Mêmes champs dérivés que data/events.make_event (durée, hors horaires, week-end)."""
+    from data.events import WORKDAY_END_H, WORKDAY_START_H
+
+    end = pd.to_datetime(work["end_ts"])
+    dur = ((end - work["ts"]).dt.total_seconds() // 60).fillna(0).clip(lower=0).astype(int)
+    last = (end - pd.Timedelta(minutes=1)).where(end > work["ts"], work["ts"])
+    after = ((work["ts"].dt.hour < WORKDAY_START_H) | (work["ts"].dt.hour >= WORKDAY_END_H)
+             | (last.dt.hour >= WORKDAY_END_H) | (last.dt.date != work["ts"].dt.date))
+    return work.assign(duration_min=dur, is_after_hours=after.astype(int),
+                       is_weekend=(work["ts"].dt.weekday >= 5).astype(int))
 
 
 def save(data: dict, out: Path = OUT) -> None:
@@ -285,8 +299,10 @@ def load_clickhouse(data: dict) -> None:
         sql = "\n".join(l for l in stmt.splitlines() if not l.strip().startswith("--")).strip()
         if sql:
             client.command(sql)
-    client.command("ALTER TABLE work_events DELETE WHERE source = 'sim'")
-    client.command("ALTER TABLE recovery_daily DELETE WHERE source = 'sim'")
+    # On ne remplace que la cohorte (ses équipes), pas les données mock de data/simulate_work.py.
+    teams = ", ".join(f"'{t}'" for t in TEAMS)
+    for table in ("work_events", "recovery_daily"):
+        client.command(f"ALTER TABLE {table} DELETE WHERE source = 'sim' AND team_id IN ({teams})")
     for name in ("work_events", "recovery_daily"):
         df = data[name].astype(object).where(data[name].notna(), None)
         client.insert(name, df.values.tolist(), column_names=list(df.columns))

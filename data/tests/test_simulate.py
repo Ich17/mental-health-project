@@ -22,6 +22,7 @@ def test_cohort_shape(sim):
 
 def test_no_content_columns(sim):
     assert set(sim["work_events"].columns) == {"user_id", "team_id", "ts", "end_ts", "kind", "created_ts",
+                                               "duration_min", "is_after_hours", "is_weekend",
                                                "n_attendees", "is_external", "status", "source"}
 
 

@@ -1,11 +1,38 @@
 # data/ : récupérer les vraies données
 
-- `gcal.py` (à créer) : Google Calendar → début, fin, nb d'invités, interne/externe, date de création. Jamais le titre ni la description.
+## Données de travail (métadonnées uniquement)
+
+Trois sources, **un seul format** (`WorkEvent` dans `events.py`, = table ClickHouse `work_events`) :
+
+| user_id (hash) | team_id | ts | end_ts | kind | created_ts | n_attendees | is_external | status | source | duration_min | is_after_hours | is_weekend |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+
+- `gcal.py` : Google Calendar → réunions (heures, invités, interne/externe, date de création). Jamais le titre.
+- `gmail.py` : Gmail (scope `gmail.metadata`) → mails envoyés/reçus (heure, nb de destinataires). Jamais le sujet ni le corps.
+- `simulate_work.py` : **mode mock**, 10 personnes × 13 semaines dont 3 dérives progressives et 1 rush ponctuel.
+  La vérité terrain (`*_truth.json`) permet de mesurer la détection (jours d'avance, fausses alertes).
+- `viva.py` : échantillon de démo **Microsoft Viva Insights** (Outlook + Teams), 300 personnes × 35 semaines,
+  7 équipes, format hebdomadaire (table `work_weekly`). Données de démo Microsoft (licence MIT).
+
+```bash
+python -m data.ingest mock                 # synthétique (aucun compte requis)
+python -m data.ingest viva                 # échantillon Microsoft Viva
+python -m data.ingest google --days 90     # vrai compte → voir GOOGLE_SETUP.md
+python -m data.ingest mock --clickhouse    # + insertion ClickHouse (CLICKHOUSE_URL)
+```
+Dans le code : `from data.ingest import load_events` (lit `DATA_MODE=mock|google`).
+
+Tous les fichiers produits vont dans `raw/` (ignoré par git).
+
+## Autres
+- `clickhouse.sql` : les tables où ranger ces données.
+
+## Données de récupération (WHOOP) et cohorte simulée
+
 - `whoop.py` : Whoop → récupération, HRV, FC repos, sommeil, strain (une ligne par jour, format `recovery_daily`).
 - `check_whoop.py` : bilan qualité + nettoyage → `whoop_daily_clean.json` / `.csv` (Excel FR). Jours manquants, strain < 1 (montre pas portée), HRV sur nuit < 3 h et valeurs impossibles sont estimés par la moyenne des jours voisins ; la colonne `imputed` liste les champs estimés. Sans pandas.
 - Alignement : la ligne du jour D = récupération / HRV / sommeil de la nuit D-1 → D, et strain de la journée D. Pour les analyses, la charge du jour D s'apparie avec la récupération de D+1.
-- `simulate.py` : ~50 profils fictifs (agenda, mails, présence, récupération) pour la vue RH et le profil de secours `persona_demo`.
-- `clickhouse.sql` : les tables où ranger ces données.
+- `simulate.py` : ~50 profils fictifs (agenda, mails, présence, récupération) pour la vue RH et le profil de secours `persona_demo`. Même format `work_events` que `events.py` (+ `kind=presence_green` pour le temps « vert » Teams) ; ses équipes (`ma`, `pe`, `conseil`, `levfin`, `restru`) ne touchent pas au mode mock.
 - `raw/` : exports JSON de secours (ignoré par git). `sim_out/` : sortie du simulateur (ignorée, régénérable).
 
 Ensuite, remplir `contracts.py` (à la racine) avec les vraies données. Voir CLAUDE.md §4, §7, §8.
