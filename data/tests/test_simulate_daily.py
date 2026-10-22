@@ -2,14 +2,17 @@ import random
 from datetime import date, timedelta
 
 from data.check_whoop import WORK_COLUMNS
-from data.simulate_daily import simulate, summary
+from data.simulate_daily import MIN_GROUP, TEAMS, simulate, simulate_cohort, summary, team_summary
 
 
 def _rows(n=60):
     rng = random.Random(0)
     d0 = date(2026, 8, 24)
     return [{"user_id": "u", "team_id": "t", "date": (d0 + timedelta(i)).isoformat(),
-             "recovery": rng.uniform(20, 90), "source": "whoop"} for i in range(n)]
+             "recovery": rng.uniform(20, 90), "hrv": rng.uniform(40, 90), "rhr": rng.uniform(50, 60),
+             "sleep_h": rng.uniform(5, 8), "sleep_consistency": rng.uniform(50, 80), "strain": rng.uniform(5, 15),
+             "bedtime": (d0 + timedelta(i)).isoformat() + "T00:30", "source": "whoop", "imputed": ""}
+            for i in range(n)]
 
 
 def test_fills_all_work_columns_consistently():
@@ -32,3 +35,24 @@ def test_low_recovery_next_day_means_more_work():
     high = [e for e, rec in pairs if rec > 70]
     assert sum(low) / len(low) > sum(high) / len(high)
     assert summary(out)
+
+
+def test_cohort_has_5_teams_of_8_with_coherent_trends():
+    base = _rows(58)
+    out = simulate_cohort(base)
+    users = {}
+    for r in out:
+        users.setdefault(r["team_id"], set()).add(r["user_id"])
+    assert set(users) == set(TEAMS) and all(len(u) == MIN_GROUP for u in users.values())
+    assert "u" in users["finance"] and len(out) == 40 * 58
+    by = lambda t, k: sum(r[k] for r in out if r["team_id"] == t) / sum(r["team_id"] == t for r in out)  # noqa: E731
+    assert by("top_management", "meeting_hours") > by("finance", "meeting_hours") > by("it", "meeting_hours")
+    assert by("top_management", "recovery") < by("it", "recovery")
+    for r in out:
+        wkend = date.fromisoformat(r["date"]).weekday() >= 5
+        if r["team_id"] in ("sales", "rh", "it") and wkend:
+            assert r["n_meetings"] == 0 and r["emails_received"] == 0
+        if r["team_id"] in ("rh", "it"):
+            assert r["emails_received_night"] == 0 and r["emails_sent_night"] == 0
+        assert 1 <= r["recovery"] <= 99 and 3 <= r["sleep_h"] <= 11
+    assert len(team_summary(out)) == 6
