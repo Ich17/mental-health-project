@@ -49,17 +49,32 @@ def get_free_slots(user_id: str, date: str) -> list[dict]:
 
 
 def team_trends(team_id: str) -> dict:
-    """Tendances anonymes d'une équipe.
+    """Tendances anonymes d'une équipe, calculées sur la cohorte (data/team_view.py).
 
-    Privacy : le seuil n >= 8 est appliqué dans la requête SQL, pas ici.
-    Si le groupe est trop petit, renvoie {"insufficient_group": True}.
+    Privacy : le seuil n >= 8 est appliqué dans la couche data (puis dans la requête
+    ClickHouse), pas ici ni dans l'agent. Si le groupe est trop petit, renvoie
+    {"insufficient_group": True}.
+    Exemple : {"unit_id": "ma", "team": "M&A", "n_bucket": "12-20", "share_in_debt": "majorité",
+    "top_cause": "réunions ajoutées le jour même", "cause_change": "+54 %", "recovery_change": -7,
+    "trend": [{"week": "2026-W40", "avg_recovery": 52}, ...]}
     """
-    return {
-        "team": "M&A", "n_bucket": "10-15", "share_in_debt": "majorité",
-        "top_cause": "réunions ajoutées après 18h", "cause_change": "+40%",
-        "trend": [
-            {"week": "2026-W40", "avg_recovery": 52},
-            {"week": "2026-W41", "avg_recovery": 47},
-            {"week": "2026-W42", "avg_recovery": 43},
-        ],
-    }
+    from data import team_view
+
+    return team_view.team_trends(team_id)
+
+
+def company_overview() -> list[dict]:
+    """Toutes les équipes affichables (n >= 8), de la plus en dérive à la plus stable.
+    Mêmes champs que team_trends, sans `trend`."""
+    from data import team_view
+
+    return team_view.company_overview()
+
+
+def measure_rule_effect(team_id: str, start_date: str) -> dict:
+    """Récupération moyenne de l'équipe avant / depuis l'application d'une règle.
+    Exemple : {"recovery_before": 61, "recovery_after": 69, "recovery_change": 8,
+    "cause_change": "-69 %", "verdict": "efficace", "weeks_since": 3}"""
+    from data import team_view
+
+    return team_view.rule_effect(team_id, start_date)
