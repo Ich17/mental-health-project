@@ -76,10 +76,10 @@ def test_to_clickhouse_creates_tables_and_inserts(monkeypatch):
             return type("R", (), {"result_rows": [(len(calls["insert"][1]), 40)]})()
 
     monkeypatch.setenv("CLICKHOUSE_URL", "https://u:p@h:1")
-    monkeypatch.setattr(clickhouse_connect, "get_client", lambda dsn: Fake())
+    monkeypatch.setattr(clickhouse_connect, "get_client", lambda dsn, secure: calls.update(secure=secure) or Fake())
     rows = simulate_cohort(_rows(10))
     simulate_daily.to_clickhouse(rows)
     assert any("CREATE TABLE IF NOT EXISTS daily_base" in c for c in calls["cmd"])
     table, data, cols = calls["insert"]
     assert table == "daily_base" and len(data) == 400 and cols[-1] == "last_minute_meetings"
-    assert isinstance(data[0][2], date)
+    assert isinstance(data[0][2], date) and calls["secure"] is True

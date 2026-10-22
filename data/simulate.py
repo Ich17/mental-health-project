@@ -294,7 +294,8 @@ def load_clickhouse(data: dict) -> None:
     from dotenv import load_dotenv
 
     load_dotenv()
-    client = clickhouse_connect.get_client(dsn=os.environ["CLICKHOUSE_URL"])
+    client = clickhouse_connect.get_client(dsn=os.environ["CLICKHOUSE_URL"],
+                                          secure=os.environ["CLICKHOUSE_URL"].startswith("https"))
     for stmt in (Path(__file__).parent / "clickhouse.sql").read_text().split(";"):
         sql = "\n".join(l for l in stmt.splitlines() if not l.strip().startswith("--")).strip()
         if sql:
