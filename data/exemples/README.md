@@ -3,6 +3,10 @@
 Cliquer sur un fichier `.csv` : GitHub l'affiche comme un tableau.
 Aucune donnée personnelle ici (simulateur inventé, Radoslaw et Viva publics).
 
+Le simulateur est **calibré sur Radoslaw** pour la forme des journées : courbe des heures d'envoi
+et nombre de destinataires (86 % des mails à une seule personne). Les volumes et la dérive restent
+ceux de la cible (juniors banque / conseil).
+
 | Fichier | Contenu |
 |---|---|
 | `simulateur_extrait.csv` | **À ouvrir en premier.** Une semaine (12 → 18 oct.) de 2 salariés fictifs : `emp01` normal, `emp02` en dérive (réunions et mails le soir). Mails reçus retirés pour la lisibilité. |

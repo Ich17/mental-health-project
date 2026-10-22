@@ -66,6 +66,41 @@ def load_events() -> list[WorkEvent]:
     return events
 
 
+BINS = 36  # journée de travail découpée en quarts d'heure (7h → 16h)
+
+
+def calibration(events: list[WorkEvent] | None = None) -> dict:
+    """Rythmes réels à reprendre dans le simulateur (forme, pas volumes).
+
+    - hour_profile : poids de chaque quart d'heure de la journée de travail pour les
+      mails envoyés en semaine (position relative : 0 = début, 1 = fin de journée) ;
+    - recipients_out / recipients_in : part des mails à 1, 2, … 10+ destinataires.
+    """
+    events = events if events is not None else load_events()
+    start, end = WORKDAY
+    bins = [0] * BINS
+    out_n, in_n = [0] * 10, [0] * 10
+    for e in events:
+        n = min(e.n_attendees, 10) - 1
+        if e.kind == "email_in":
+            in_n[n] += 1
+            continue
+        out_n[n] += 1
+        t = datetime.fromisoformat(e.ts)
+        h = t.hour + t.minute / 60
+        if not e.is_weekend and start <= h < end:
+            bins[int((h - start) / (end - start) * BINS)] += 1
+    share = lambda xs: [round(x / sum(xs), 4) for x in xs]  # noqa: E731
+    return {"hour_profile": share(bins), "recipients_out": share(out_n), "recipients_in": share(in_n)}
+
+
 def _event(person: int, kind: str, when: datetime, n: int) -> WorkEvent:
     return make_event(pseudonymize(f"radoslaw-{person}"), TEAM_ID, kind, "radoslaw", when,
                       n_attendees=n, workday=WORKDAY)
+
+
+if __name__ == "__main__":
+    # Recalcule les constantes RADOSLAW_* de data/simulate_work.py.
+    import json
+
+    print(json.dumps(calibration()))
