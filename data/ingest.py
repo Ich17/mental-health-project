@@ -81,7 +81,7 @@ def to_clickhouse(events: list[WorkEvent]) -> None:
     url = os.getenv("CLICKHOUSE_URL")
     if not url:
         raise RuntimeError("CLICKHOUSE_URL absent du .env")
-    client = clickhouse_connect.get_client(dsn=url)
+    client = clickhouse_connect.get_client(dsn=url, secure=url.startswith("https"))
     rows = []
     for e in events:
         d = e.to_dict()
@@ -96,7 +96,8 @@ def viva_to_clickhouse(rows: list[dict]) -> None:
     from data.viva import COLUMNS
 
     cols = ["user_id", "team_id", "level", "week", "source"] + list(COLUMNS.values())
-    client = clickhouse_connect.get_client(dsn=os.environ["CLICKHOUSE_URL"])
+    client = clickhouse_connect.get_client(dsn=os.environ["CLICKHOUSE_URL"],
+                                          secure=os.environ["CLICKHOUSE_URL"].startswith("https"))
     data = [[date.fromisoformat(r[c]) if c == "week" else r[c] for c in cols] for r in rows]
     client.insert("work_weekly", data, column_names=cols)
 

@@ -168,7 +168,7 @@ def to_clickhouse(rows: list[dict]) -> None:
     url = os.getenv("CLICKHOUSE_URL")
     if not url:
         raise SystemExit("CLICKHOUSE_URL absent du fichier .env (voir .env.example)")
-    client = clickhouse_connect.get_client(dsn=url)
+    client = clickhouse_connect.get_client(dsn=url, secure=url.startswith("https"))
     for stmt in (Path(__file__).parent / "clickhouse.sql").read_text().split(";"):
         sql = "\n".join(line for line in stmt.splitlines() if not line.strip().startswith("--")).strip()
         if sql:
