@@ -62,17 +62,19 @@ def pseudonymize(identifier: str) -> str:
 def make_event(user_id: str, team_id: str, kind: str, source: str, start: datetime,
                end: Optional[datetime] = None, created: Optional[datetime] = None,
                n_attendees: int = 0, is_external: bool = False,
-               status: str = "confirmed") -> WorkEvent:
+               status: str = "confirmed", workday: tuple = None) -> WorkEvent:
     """Construit un WorkEvent et calcule les champs dérivés (durée, soir, week-end).
 
     `start`, `end`, `created` : datetimes en heure locale, sans fuseau (naïfs).
+    `workday` : (début, fin) des horaires normaux si différents du défaut (ex. usine 7h-16h).
     """
+    day_start, day_end = workday or (WORKDAY_START_H, WORKDAY_END_H)
     if kind not in KINDS:
         raise ValueError(f"kind inconnu : {kind}")
     duration = int((end - start).total_seconds() // 60) if end else 0
     last = end - timedelta(minutes=1) if end and end > start else start
-    after_hours = (start.hour < WORKDAY_START_H or start.hour >= WORKDAY_END_H
-                   or last.hour >= WORKDAY_END_H or last.date() != start.date())
+    after_hours = (start.hour < day_start or start.hour >= day_end
+                   or last.hour >= day_end or last.date() != start.date())
     return WorkEvent(
         user_id=user_id, team_id=team_id, kind=kind, source=source,
         ts=_iso(start), end_ts=_iso(end), created_ts=_iso(created),
