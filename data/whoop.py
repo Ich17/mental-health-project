@@ -193,6 +193,8 @@ def to_daily(recovery: list[dict], sleep: list[dict], cycle: list[dict],
                      + ss["total_rem_sleep_time_milli"])
         cy = cycles.get(rec.get("cycle_id")) or {}
         day = _local(sl["end"], sl.get("timezone_offset")).date().isoformat()
+        if day in rows and rows[day]["sleep_h"] >= asleep_ms / 3_600_000:
+            continue  # deux nuits le même jour (réveil nocturne coupé en 2) : on garde la plus longue
         rows[day] = {
             "user_id": user_id, "team_id": team_id, "date": day,
             "recovery": float(sc["recovery_score"]),

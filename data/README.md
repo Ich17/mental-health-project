@@ -2,6 +2,7 @@
 
 - `gcal.py` (à créer) : Google Calendar → début, fin, nb d'invités, interne/externe, date de création. Jamais le titre ni la description.
 - `whoop.py` : Whoop → récupération, HRV, FC repos, sommeil, strain (une ligne par jour, format `recovery_daily`).
+- `check_whoop.py` : bilan qualité + nettoyage (jours manquants, valeurs impossibles, siestes, fuseaux) → `whoop_daily_clean.json`. Sans pandas.
 - `simulate.py` : ~50 profils fictifs (agenda, mails, présence, récupération) pour la vue RH et le profil de secours `persona_demo`.
 - `clickhouse.sql` : les tables où ranger ces données.
 - `raw/` : exports JSON de secours (ignoré par git). `sim_out/` : sortie du simulateur (ignorée, régénérable).

@@ -43,3 +43,12 @@ def test_get_retries_on_slow_network(monkeypatch):
     with httpx.Client(base_url="https://x", transport=httpx.MockTransport(handler)) as c:
         assert whoop._get(c, "/v2/cycle", {}).json() == {"records": [], "next_token": None}
     assert calls["n"] == 3
+
+
+def test_clean_drops_out_of_bounds_and_duplicates():
+    from data.check_whoop import clean
+
+    rows = [{"date": "2026-10-21", "recovery": 44, "hrv": 900, "strain": 0},
+            {"date": "2026-10-21", "recovery": 50, "hrv": 50, "strain": 10}]
+    out, notes = clean(rows)
+    assert len(out) == 1 and out[0]["hrv"] is None and out[0]["strain"] is None and len(notes) == 2
