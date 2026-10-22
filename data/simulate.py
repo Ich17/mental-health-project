@@ -13,7 +13,8 @@ Modèle (volontairement simple, mais réaliste) :
   après 17h ») depuis 4 semaines et récupère mieux ; l'équipe Restructuring a < 8 personnes
   (pour montrer le refus « groupe trop petit »).
 
-Calibrage : `--calibrate data/raw/whoop_daily.json` recentre les niveaux (moyennes, variabilité,
+Calibrage : `--calibrate data/raw/whoop_daily.json` (ou le résumé `whoop_calibration.json`
+produit par `python -m data.calibrate`) recentre les niveaux (moyennes, variabilité,
 effet du jour de la semaine) sur de vraies données WHOOP. Sinon : fourchettes WHOOP plausibles.
 
     python -m data.simulate                       # → data/sim_out/*.csv (ignoré par git)
@@ -30,6 +31,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from data.calibrate import calibrate
 
 OUT = Path(__file__).resolve().parent / "sim_out"
 
@@ -74,26 +77,6 @@ class Person:
     bedtime_h: float
     noise: float
     sens: dict = field(default_factory=dict)  # multiplicateur personnel par driver
-
-
-# --- Calibrage ---------------------------------------------------------------
-
-def calibrate(path: str | Path) -> dict:
-    """Agrégats (moyennes, écarts-types) à partir de vraies lignes recovery_daily. Rien d'autre."""
-    df = pd.DataFrame(json.loads(Path(path).read_text()))
-    df["date"] = pd.to_datetime(df["date"])
-    bed = pd.to_datetime(df["bedtime"])
-    bed_h = (bed.dt.hour + bed.dt.minute / 60).where(lambda h: h > 12, lambda h: h + 24)
-    wk = df.groupby(df["date"].dt.weekday)["recovery"].mean() - df["recovery"].mean()
-    cal = {
-        "recovery_mean": df["recovery"].mean(), "recovery_sd": df["recovery"].std(),
-        "hrv_median": df["hrv"].median(), "rhr_mean": df["rhr"].mean(), "rhr_sd": df["rhr"].std(),
-        "sleep_h_mean": df["sleep_h"].mean(), "sleep_h_sd": df["sleep_h"].std(),
-        "sleep_consistency_mean": df["sleep_consistency"].mean(),
-        "strain_mean": df["strain"].mean(), "bedtime_h": bed_h.mean(),
-        "weekday_recovery": [round(float(wk.get(i, 0)), 1) for i in range(7)],
-    }
-    return {k: (round(float(v), 2) if not isinstance(v, list) else v) for k, v in cal.items()}
 
 
 # --- Population ---------------------------------------------------------------
@@ -239,7 +222,7 @@ def recovery_next(rng, p: Person, f: dict, wd_next: int, debt: float, cal: dict)
 
 def simulate(weeks: int = 8, future_days: int = 14, seed: int = 42, cal: dict | None = None,
              today: date | None = None) -> dict[str, pd.DataFrame]:
-    cal = {**DEFAULT_CAL, **(cal or {})}
+    cal = {**DEFAULT_CAL, **{k: v for k, v in (cal or {}).items() if k in DEFAULT_CAL}}
     today = today or date.today()
     first = today - timedelta(days=7 * weeks)
     rng = np.random.default_rng(seed)
