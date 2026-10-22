@@ -51,6 +51,6 @@ def test_closing_week_is_not_an_alert(monkeypatch):
     signal = next(m for m in r["messages"] if m["kind"] == "signal")
     assert signal["data"]["tendance"] == "pic_passe" and signal["data"]["niveau"] == "vert"
     assert ("analyse", "question") not in [(m["author"], m["kind"]) for m in r["messages"]]
-    assert store.list_actions("ichane") == []                 # ni bloc ni expérience
+    assert store.list_actions("ichane", "proposed") == []     # ni bloc ni expérience proposés
     assert "pas de dérive" in r["final_message"]
     assert guardrails.check_text(r["final_message"]) == []

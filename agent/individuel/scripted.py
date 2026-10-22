@@ -16,6 +16,7 @@ import ast
 import itertools
 import json
 import re
+from datetime import date
 from statistics import mean
 
 from agent.llm import Reply
@@ -61,7 +62,12 @@ def _results(messages: list[dict]) -> dict[str, object]:
     return out
 
 
-PEAKS = ("pic_passe", "pic_attendu")   # tendances d'assess_trend qui ne sont pas une dérive de fond
+PEAKS = ("pic_passe", "pic_attendu")
+# Bloc proposé par défaut, et celui qu'on essaie si l'Évaluateur juge les déjeuners sans effet.
+BLOCK_DEFAULT = ("dejeuner", "12:30", "13:30")
+BLOCK_SWITCH = ("sport", "18:00", "19:00")
+BLOCK_LABELS = {"dejeuner": "pause(s) déjeuner protégée(s)", "sport": "créneau(x) sport en fin de journée"}
+BLOCK_PITCH = {"dejeuner": "protéger ta pause déjeuner", "sport": "bloquer un créneau sport en fin de journée"}   # tendances d'assess_trend qui ne sont pas une dérive de fond
 JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
@@ -97,6 +103,9 @@ class ScriptedLLM:
             recent = days[-14:]
             heavy = [d["recovery"] for d in recent if d["last_minute_meetings"] >= 3]
             light = [d["recovery"] for d in recent if d["last_minute_meetings"] <= 1]
+            if not heavy or not light:
+                return _post("analyse", "reponse", "Pas de comparaison possible sur les 14 derniers jours : "
+                             "il faut des jours avec et sans calls ajoutés le jour même.")
             return _post("analyse", "reponse",
                          f"Sur les 14 derniers jours : récupération moyenne {mean(heavy):.0f} après les jours "
                          f"à 3 calls ajoutés ou plus ({len(heavy)} jours), contre {mean(light):.0f} après les "
@@ -127,6 +136,48 @@ class ScriptedLLM:
                      {"niveau": level, "tendance": tendance, "jours_rouges": red,
                       "derives": {k: f"{v:+d} %" for k, v in drift.items()}})
 
+    # ------------------------------------------------------------------ Évaluateur
+    def _evaluateur(self, board, instruction, kinds, res) -> Reply:
+        if "get_memory" not in res:
+            return Reply("tool_use", [_call("get_memory"), _call("evaluate_blocks")])
+        today = date.today().isoformat()
+        ended = [e for e in res["get_memory"][0]["experiments"] if str(e.get("end_date") or "9999") < today]
+        if ended and "evaluate_experiment" not in res:
+            return Reply("tool_use", [_call("evaluate_experiment", experiment_id=ended[-1]["id"])])
+
+        blocs = res["evaluate_blocks"][0]["blocs"]
+        exp = res.get("evaluate_experiment", [None])[0]
+        exp_ok = bool(exp) and str(exp.get("verdict", "")).startswith(("garder", "efficace"))
+        if "record_evaluation" not in res:
+            calls = [_call("record_evaluation", subject=f"bloc_{b['bloc']}", verdict=b["verdict"],
+                           effect_text=f"{b['ecart_points']:+d} points de récupération le lendemain "
+                                       f"({b['jours_avec_bloc']} jours avec bloc)", confidence="moyenne")
+                     for b in blocs if b["verdict"] != "trop tôt"]
+            if exp and exp.get("verdict"):
+                calls.append(_call("record_evaluation", subject=f"experience_{exp['id']}",
+                                   verdict="efficace" if exp_ok else "sans effet net",
+                                   effect_text=f"« {exp['rule_text']} » : {exp['verdict']}", confidence="moyenne"))
+            if calls:
+                return Reply("tool_use", calls[:3])
+
+        lines = []
+        for b in blocs:
+            if b["verdict"] == "trop tôt":
+                lines.append(f"Blocs {b['bloc']} : trop tôt pour conclure ({b['jours_avec_bloc']} jour(s)).")
+                continue
+            note = f" ({b['note']})" if b.get("note") else ""
+            lines.append(f"Blocs {b['bloc']} acceptés ({b['jours_avec_bloc']} jours) : récupération "
+                         f"{b['recuperation_avec_bloc']} le lendemain contre {b['recuperation_sans_bloc']} les autres "
+                         f"jours ouvrés ({b['ecart_points']:+d} points) → {b['verdict']}{note}.")
+        if exp:
+            lines.append(f"Expérience « {exp['rule_text']} » : {exp.get('verdict') or 'en cours'}.")
+        return _post("analyse", "evaluation",
+                     " ".join(lines) or "Rien n'a encore été mis en place : rien à évaluer.",
+                     {"blocs": [{"bloc": b["bloc"], "verdict": b["verdict"], "ecart_points": b.get("ecart_points")}
+                                for b in blocs],
+                      "experience_validee": exp["rule_text"] if exp_ok else None,
+                      "derniere_experience": exp["rule_text"] if exp else None})
+
     # ------------------------------------------------------------------ Analyse
     def _analyse(self, board, instruction, kinds, res) -> Reply:
         if kinds == ["reponse"]:
@@ -145,15 +196,10 @@ class ScriptedLLM:
                          "moyenne après les jours chargés en calls de dernière minute vs les jours légers.")
         if "get_drivers" not in res:
             return Reply("tool_use", [_call("get_drivers"), _call("get_memory")])
-        if "evaluate_experiment" not in res:
-            exps = res["get_memory"][0]["experiments"]
-            if exps:
-                return Reply("tool_use", [_call("evaluate_experiment", experiment_id=exps[-1]["id"])])
-
         drivers = res["get_drivers"][0][:2]
-        exp = res.get("evaluate_experiment", [None])[0]
-        valid = exp["rule_text"] if exp and str(exp.get("verdict", "")).startswith("garder") else None
-        tested = (exp or {}).get("rule_text", "").lower()
+        ev = _board_data(board, "evaluation")
+        valid = ev.get("experience_validee")
+        tested = (ev.get("derniere_experience") or "").lower()
         to_test = None
         if "last_minute_meetings" in [d["factor"] for d in drivers] and "jour même" not in tested and not peak:
             to_test = "Refuser les calls ajoutés le jour même après 17h"
@@ -161,8 +207,7 @@ class ScriptedLLM:
         confirm = (f" La détection confirme : {answer['recup_jours_charges']} de récupération après les jours "
                    f"chargés contre {answer['recup_jours_legers']} après les jours légers.") if answer else ""
         causes = "; ".join(f"{d['label']} ({d['effect']}, confiance {d['confidence']})" for d in drivers)
-        memo = (f" Déjà validé pour cette personne : « {exp['rule_text']} », {exp['verdict']}."
-                if valid else "")
+        memo = f" Déjà validé pour cette personne (évaluateur) : « {valid} »." if valid else ""
         test = f" À tester : « {to_test} »." if to_test else ""
         if peak:
             causes = ("la baisse vient d'un pic de charge ponctuel, pas d'une cause de fond. "
@@ -185,13 +230,14 @@ class ScriptedLLM:
                          + "Ce sont des hypothèses : on peut en tester une pendant deux semaines si tu veux.")
         red = signal.get("jours_rouges", [])[:2]
         peak = signal.get("tendance") in PEAKS
+        lunch = next((b for b in _board_data(board, "evaluation").get("blocs", []) if b["bloc"] == "dejeuner"), {})
+        purpose, start, end = BLOCK_SWITCH if lunch.get("verdict") == "sans effet net" else BLOCK_DEFAULT
 
         if "proposition" in kinds:
             if "get_free_slots" not in res and red:
                 return Reply("tool_use", [_call("get_free_slots", date=d) for d in red])
             if "propose_block" not in res and "start_experiment" not in res:
-                calls = [_call("propose_block", date=d, start="12:30", end="13:30", purpose="dejeuner")
-                         for d in red]
+                calls = [_call("propose_block", date=d, start=start, end=end, purpose=purpose) for d in red]
                 if peak:
                     pass  # pic ponctuel : pas d'expérience, on protège seulement les jours à risque
                 elif analysis.get("a_tester"):
@@ -207,7 +253,7 @@ class ScriptedLLM:
                              "Plan vide : la baisse était ponctuelle et aucun jour à risque n'arrive. "
                              "Rien à bloquer cette semaine.")
             return _post("orchestrateur", "proposition",
-                         f"Plan : {n_blocks} pause(s) déjeuner protégée(s) sur les jours rouges"
+                         f"Plan : {n_blocks} {BLOCK_LABELS[purpose]} sur les jours rouges"
                          + (f", et une expérience de 14 jours : « {exp} »" if exp else "")
                          + ". Objectif : limiter la dette de récupération sur les jours à risque.")
 
@@ -224,9 +270,14 @@ class ScriptedLLM:
         else:
             trend = "Ta récupération est stable par rapport à ton habitude."
         parts = [trend]
+        if lunch.get("verdict") == "efficace":
+            parts.append(f"Tes déjeuners protégés ont marché ({lunch.get('ecart_points', 0):+d} points de récupération "
+                         "le lendemain) : on continue.")
+        elif lunch.get("verdict") == "sans effet net" and red:
+            parts.append("Tes déjeuners protégés n'ont rien changé à ta récupération : on essaie autre chose.")
         if red:
             n = "Une journée s'annonce difficile" if len(red) == 1 else f"{len(red)} journées s'annoncent difficiles"
-            parts.append(f"{n} ({', '.join(_jour(d) for d in red)}) : je te propose d'y protéger ta pause déjeuner.")
+            parts.append(f"{n} ({', '.join(_jour(d) for d in red)}) : je te propose d'y {BLOCK_PITCH[purpose]}.")
         if analysis.get("deja_valide") and not peak:
             parts.append(f"La dernière fois, « {analysis['deja_valide']} » t'avait réussi.")
         if analysis.get("a_tester"):
