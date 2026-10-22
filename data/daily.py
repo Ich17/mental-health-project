@@ -1,10 +1,12 @@
 """Indicateurs par jour pour l'agent individuel : events de travail + récupération → daily_metrics.
 
-C'est la vue `daily_metrics` du CLAUDE.md §7, en Python (sans pandas) en attendant ClickHouse :
-une ligne par jour J avec la charge de J et la récupération de J+1 (la ligne Whoop du jour
-J+1 = nuit de J à J+1, cf. data/README.md).
+C'est la vue `daily_metrics` du CLAUDE.md §7 : une ligne par jour J avec la charge de J et la
+récupération de J+1 (la ligne Whoop du jour J+1 = nuit de J à J+1, cf. data/README.md).
 
 Sources, choisies par DAILY_DATA (défaut `auto` : la première disponible) :
+- `clickhouse` : table `daily_base` sur Aiven (CLICKHOUSE_URL), chargée par data/simulate_daily.py
+    (santé Whoop réelle d'Ichane, colonnes de travail simulées, cohorte de 5 équipes).
+    Si ClickHouse ne répond pas ou n'a rien pour cet utilisateur, on passe aux sources locales.
 - `real` : vraies données exportées en local (jamais dans git)
     data/raw/work_events_google.jsonl  (python -m data.ingest google)
     data/raw/whoop_daily_clean.json ou whoop_daily.json  (python -m data.whoop fetch / data.check_whoop)
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import os
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -31,6 +34,9 @@ WHOOP_FILES = (RAW / "whoop_daily_clean.json", RAW / "whoop_daily.json")
 SIM_DIRS = (DATA / "sim_out", RAW / "sim_out")
 SIM_DEMO_USER = "persona_demo"
 IGNORED_STATUS = {"cancelled", "declined"}
+DAILY_BASE_COLUMNS = ["date", "recovery", "hrv", "sleep_h", "n_meetings", "meeting_hours",
+                      "last_minute_meetings", "emails_received", "emails_received_night"]
+log = logging.getLogger(__name__)
 
 
 class NoDailyData(Exception):
@@ -68,8 +74,49 @@ def _load_sim(user_id: str) -> tuple[list[dict], list[dict]]:
     return [e for e in events if e["user_id"] == uid], [r for r in recovery if r["user_id"] == uid]
 
 
+def _clickhouse_wanted() -> bool:
+    return os.getenv("DAILY_DATA", "auto") in ("auto", "clickhouse") and bool(os.getenv("CLICKHOUSE_URL"))
+
+
+def _query_daily_base(user_id: str) -> list[dict]:
+    import clickhouse_connect
+
+    url = os.environ["CLICKHOUSE_URL"]
+    client = clickhouse_connect.get_client(dsn=url, secure=url.startswith("https"), connect_timeout=10)
+    q = client.query(f"SELECT {', '.join(DAILY_BASE_COLUMNS)} FROM daily_base "
+                     "WHERE user_id = {uid:String} ORDER BY date", parameters={"uid": user_id})
+    return [dict(zip(q.column_names, r)) for r in q.result_rows]
+
+
+def _daily_from_base(base: list[dict]) -> list[dict]:
+    """Lignes de daily_base (santé de la nuit D-1 → D + travail du jour D) → charge de J + récupération de J+1."""
+    by_date = {str(r["date"])[:10]: r for r in base}
+    rows = []
+    for day_iso in sorted(by_date):
+        w = by_date[day_iso]
+        nxt = by_date.get((date.fromisoformat(day_iso) + timedelta(days=1)).isoformat())
+        if not nxt or _num(nxt.get("recovery")) is None:
+            continue
+        rows.append({
+            "date": day_iso,
+            "meeting_hours": round(_num(w.get("meeting_hours")) or 0, 1),
+            "n_meetings": int(w.get("n_meetings") or 0),
+            "last_minute_meetings": int(w.get("last_minute_meetings") or 0),
+            "meetings_after_20h": None,           # pas dans daily_base
+            "emails_in": int(w.get("emails_received") or 0),
+            "emails_night": int(w.get("emails_received_night") or 0),   # mails reçus 19h → 6h
+            "green_hours": None,                  # pas dans daily_base
+            "recovery": round(_num(nxt["recovery"])),
+            "hrv": round(_num(nxt.get("hrv")) or 0),
+            "sleep_h": round(_num(nxt.get("sleep_h")) or 0, 1),
+            "context": None,
+            "source": "clickhouse",
+        })
+    return rows
+
+
 def source() -> str | None:
-    """La source qui sera utilisée : real, sim ou None."""
+    """La source locale qui sera utilisée si ClickHouse ne répond pas : real, sim ou None."""
     wanted = os.getenv("DAILY_DATA", "auto")
     if wanted in ("auto", "real") and GOOGLE_EVENTS.exists() and _whoop_file():
         return "real"
@@ -124,6 +171,14 @@ def _work_by_day(events: list[dict]) -> dict[str, dict]:
 
 def daily_metrics(user_id: str, days: int = 42) -> list[dict]:
     """Même format que contracts.get_daily_metrics : une ligne par jour J, charge de J + récupération de J+1."""
+    if _clickhouse_wanted():
+        try:
+            rows = _daily_from_base(_query_daily_base(user_id))
+        except Exception as e:  # ClickHouse injoignable ou table absente : on passe aux sources locales
+            log.warning("daily_base illisible (%s), repli sur les sources locales", type(e).__name__)
+            rows = []
+        if rows:
+            return rows[-days:]
     src = source()
     if src is None:
         raise NoDailyData("ni export réel (data/raw/) ni sortie du simulateur (data/sim_out/)")
