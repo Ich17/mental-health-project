@@ -1,0 +1,70 @@
+"""Routes des agents individuels : lancer une délibération (semaine, jour, chat)
+et accepter / refuser les actions proposées.
+
+Le suivi d'un run (GET /api/agent/runs/{id}) est commun avec l'équipe : voir team_routes.py.
+"""
+import os
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+import contracts
+from agent.individuel import council
+from agent.memory import get_store
+from api.team_routes import _in_background
+
+router = APIRouter(prefix="/api")
+USER_ID = os.getenv("USER_ID", "ichane")
+
+
+class RunRequest(BaseModel):
+    kind: Literal["semaine", "jour", "chat"] = "semaine"
+    question: str | None = None
+    wait: bool = False  # True : attend la fin du run (tests, CLI) ; False : renvoie l'id tout de suite
+
+
+@router.post("/agent/runs")
+def start_run(req: RunRequest):
+    if req.kind == "chat" and not req.question:
+        raise HTTPException(422, "question obligatoire en mode chat")
+    if req.wait:
+        return council.run(USER_ID, req.kind, req.question)
+    return _in_background(lambda **kw: council.run(USER_ID, req.kind, req.question, **kw))
+
+
+@router.get("/actions")
+def list_actions(status: str | None = "proposed"):
+    return get_store().list_actions(USER_ID, status)
+
+
+@router.post("/actions/{action_id}/accept")
+def accept_action(action_id: int):
+    """Seul endroit où une action est exécutée : après le clic de la personne."""
+    store = get_store()
+    action = store.get_action(action_id)
+    if action is None or action["user_id"] != USER_ID:
+        raise HTTPException(404, "action introuvable")
+    if action["status"] != "proposed":
+        raise HTTPException(409, f"action déjà {action['status']}")
+
+    p, result = action["payload"], {}
+    if action["kind"] == "calendar_block":
+        result = contracts.create_calendar_block(USER_ID, p["start"], p["end"])
+    elif action["kind"] == "experiment":
+        result = {"experiment_id": store.start_experiment(
+            USER_ID, p["rule_text"], p["start_date"], p["end_date"], p.get("baseline_recovery"))}
+    elif action["kind"] == "draft_message":
+        result = {"text": p["text"], "note": "à envoyer toi-même si tu le souhaites"}
+    store.set_action_status(action_id, "done" if action["kind"] != "draft_message" else "accepted")
+    return {"action_id": action_id, "result": result}
+
+
+@router.post("/actions/{action_id}/reject")
+def reject_action(action_id: int):
+    store = get_store()
+    action = store.get_action(action_id)
+    if action is None or action["user_id"] != USER_ID:
+        raise HTTPException(404, "action introuvable")
+    store.set_action_status(action_id, "rejected")
+    return {"action_id": action_id, "status": "rejected"}
